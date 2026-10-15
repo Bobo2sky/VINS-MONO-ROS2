@@ -4,6 +4,7 @@
 #include <nav_msgs/msg/path.hpp>
 #include <sensor_msgs/msg/point_cloud.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/compressed_image.hpp>
 #include <sensor_msgs/image_encodings.hpp>
 #include <visualization_msgs/msg/marker.hpp>
 #include <std_msgs/msg/bool.hpp>
@@ -13,6 +14,7 @@
 #include <mutex>
 #include <queue>
 #include <thread>
+#include <atomic>
 #include <eigen3/Eigen/Dense>
 #include <opencv2/opencv.hpp>
 #include <opencv2/core/eigen.hpp>
@@ -30,6 +32,28 @@ queue<nav_msgs::msg::Odometry::ConstPtr> pose_buf;
 queue<Eigen::Vector3d> odometry_buf;
 std::mutex m_buf;
 std::mutex m_process;
+
+// 图像输入格式:0 = sensor_msgs/msg/Image,1 = sensor_msgs/msg/CompressedImage
+enum ImageFormat { FORMAT_RAW = 0, FORMAT_COMPRESSED = 1 };
+std::atomic<int> image_format{-1};
+
+// 自动判断接收的图像数据格式:首条到达的消息锁定格式,
+// 之后只处理该格式(raw 与 compressed 同时发布时防止重复处理)
+bool acceptImageFormat(int format)
+{
+    int expected = -1;
+    if (image_format.compare_exchange_strong(expected, format))
+        return true;
+    if (image_format.load() != format)
+    {
+        static std::atomic<bool> warned{false};
+        if (!warned.exchange(true))
+            RCUTILS_LOG_WARN("both raw and compressed image streams detected, only the %s stream is processed",
+                             image_format.load() == FORMAT_RAW ? "raw" : "compressed");
+        return false;
+    }
+    return true;
+}
 int frame_index = 0;
 int sequence = 1;
 PoseGraph posegraph;
@@ -89,11 +113,8 @@ void new_sequence()
     m_buf.unlock();
 }
 
-void image_callback(const sensor_msgs::msg::Image::ConstPtr image_msg)
+void push_image(const sensor_msgs::msg::Image::ConstPtr image_msg)
 {
-    // ROS_INFO("image_callback!");
-    if (!LOOP_CLOSURE)
-        return;
     m_buf.lock();
     image_buf.push(image_msg);
     m_buf.unlock();
@@ -108,6 +129,37 @@ void image_callback(const sensor_msgs::msg::Image::ConstPtr image_msg)
         new_sequence();
     }
     last_image_time = image_msg->header.stamp.sec + image_msg->header.stamp.nanosec * (1e-9);
+}
+
+void image_callback(const sensor_msgs::msg::Image::ConstPtr image_msg)
+{
+    // ROS_INFO("image_callback!");
+    if (!LOOP_CLOSURE)
+        return;
+    if (!acceptImageFormat(FORMAT_RAW))
+        return;
+    push_image(image_msg);
+}
+
+// 兼容 sensor_msgs/msg/CompressedImage。
+// 压缩流(jpeg/png)独立解码:imdecode 直接解码为灰度图,
+// 与 raw 路径的 cv_bridge mono8 转换完全分离
+void compressed_image_callback(const sensor_msgs::msg::CompressedImage::SharedPtr image_msg)
+{
+    if (!LOOP_CLOSURE)
+        return;
+    if (!acceptImageFormat(FORMAT_COMPRESSED))
+        return;
+    cv::Mat buf(1, image_msg->data.size(), CV_8UC1, const_cast<uint8_t *>(image_msg->data.data()));
+    cv::Mat gray = cv::imdecode(buf, cv::IMREAD_GRAYSCALE);
+    if (gray.empty())
+    {
+        RCUTILS_LOG_ERROR("compressed image decode failed (format: %s)", image_msg->format.c_str());
+        return;
+    }
+    // 包装为 mono8 Image 消息,复用后续关键帧处理主体
+    cv_bridge::CvImage cv_img(image_msg->header, sensor_msgs::image_encodings::MONO8, gray);
+    push_image(cv_img.toImageMsg());
 }
 
 void point_callback(const sensor_msgs::msg::PointCloud::ConstPtr point_msg)
@@ -538,7 +590,26 @@ int main(int argc, char **argv)
 
     auto sub_imu_forward = n->create_subscription<nav_msgs::msg::Odometry>("/vins_estimator/imu_propagate", rclcpp::QoS(rclcpp::KeepLast(2000)), imu_forward_callback);
     auto sub_vio = n->create_subscription<nav_msgs::msg::Odometry>("/vins_estimator/odometry", rclcpp::QoS(rclcpp::KeepLast(2000)), vio_callback);
-    auto sub_image = n->create_subscription<sensor_msgs::msg::Image>(IMAGE_TOPIC, rclcpp::QoS(rclcpp::KeepLast(2000)), image_callback);
+    // 按话题名自动组合 raw 与 compressed 订阅(与 feature_tracker 相同策略):
+    //   - image_topic 以 "/compressed" 结尾:该话题订阅 CompressedImage,
+    //     并订阅去掉后缀的 base 话题上的 raw Image
+    //   - 否则:订阅 image_topic 上的 raw Image 及 image_topic + "/compressed" 上的压缩流
+    // 首条到达的消息锁定实际使用的格式(见 acceptImageFormat)
+    std::string raw_topic = IMAGE_TOPIC;
+    std::string compressed_topic = IMAGE_TOPIC;
+    const std::string compressed_suffix = "/compressed";
+    if (raw_topic.size() > compressed_suffix.size() &&
+        raw_topic.compare(raw_topic.size() - compressed_suffix.size(), compressed_suffix.size(), compressed_suffix) == 0)
+    {
+        compressed_topic = raw_topic;
+        raw_topic = raw_topic.substr(0, raw_topic.size() - compressed_suffix.size());
+    }
+    else
+    {
+        compressed_topic = raw_topic + compressed_suffix;
+    }
+    auto sub_image = n->create_subscription<sensor_msgs::msg::Image>(raw_topic, rclcpp::QoS(rclcpp::KeepLast(2000)), image_callback);
+    auto sub_image_compressed = n->create_subscription<sensor_msgs::msg::CompressedImage>(compressed_topic, rclcpp::QoS(rclcpp::KeepLast(2000)), compressed_image_callback);
     auto sub_pose = n->create_subscription<nav_msgs::msg::Odometry>("/vins_estimator/keyframe_pose", rclcpp::QoS(rclcpp::KeepLast(2000)), pose_callback);
     auto sub_extrinsic = n->create_subscription<nav_msgs::msg::Odometry>("/vins_estimator/extrinsic", rclcpp::QoS(rclcpp::KeepLast(2000)), extrinsic_callback);
     auto sub_point = n->create_subscription<sensor_msgs::msg::PointCloud>("/vins_estimator/keyframe_point", rclcpp::QoS(rclcpp::KeepLast(2000)), point_callback);

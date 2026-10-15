@@ -42,7 +42,7 @@ void readParameters(rclcpp::Node::SharedPtr &n)
     config_file = readParam<std::string>(n, "config_file");
     RCUTILS_LOG_INFO("config_file: %s", config_file.c_str());
     cv::FileStorage fsSettings(config_file, cv::FileStorage::READ);
-    if(!fsSettings.isOpened())
+    if (!fsSettings.isOpened())
     {
         RCUTILS_LOG_ERROR("ERROR: Wrong path to settings");
     }
@@ -63,7 +63,7 @@ void readParameters(rclcpp::Node::SharedPtr &n)
         FISHEYE_MASK = VINS_FOLDER_PATH + "config/fisheye_mask.jpg";
     CAM_NAMES.push_back(config_file);
 
-    WINDOW_SIZE = 20;
+    WINDOW_SIZE = 20; // 调整WINDOW_SIZE的大小会影响VINS-Mono的性能，增大窗口大小可以提高精度，但会增加计算量和延迟。默认WINDOW_SIZE=20，原始图像是20hz，1s的时间滑窗
     STEREO_TRACK = false;
     FOCAL_LENGTH = 460;
     PUB_THIS_FRAME = false;
@@ -72,6 +72,4 @@ void readParameters(rclcpp::Node::SharedPtr &n)
         FREQ = 100;
 
     fsSettings.release();
-
-
 }

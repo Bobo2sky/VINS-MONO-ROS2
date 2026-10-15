@@ -20,12 +20,17 @@ public:
         Parameters(const std::string& cameraName,
                    int w, int h,
                    double k1, double k2, double p1, double p2,
-                   double fx, double fy, double cx, double cy);
+                   double fx, double fy, double cx, double cy,
+                   double k3 = 0.0, double k4 = 0.0, double k5 = 0.0, double k6 = 0.0);
 
         double& k1(void);
         double& k2(void);
         double& p1(void);
         double& p2(void);
+        double& k3(void);
+        double& k4(void);
+        double& k5(void);
+        double& k6(void);
         double& fx(void);
         double& fy(void);
         double& cx(void);
@@ -36,6 +41,10 @@ public:
         double k2(void) const;
         double p1(void) const;
         double p2(void) const;
+        double k3(void) const;
+        double k4(void) const;
+        double k5(void) const;
+        double k6(void) const;
         double fx(void) const;
         double fy(void) const;
         double cx(void) const;
@@ -52,6 +61,11 @@ public:
         double m_k2;
         double m_p1;
         double m_p2;
+        // OpenCV rational 模型扩展:k1,k2,k3 为分子径向项,k4,k5,k6 为分母项(缺省 0,兼容旧配置)
+        double m_k3;
+        double m_k4;
+        double m_k5;
+        double m_k6;
         double m_fx;
         double m_fy;
         double m_cx;

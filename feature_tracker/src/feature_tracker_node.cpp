@@ -1,11 +1,14 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rcutils/logging_macros.h>
 #include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/compressed_image.hpp>
 #include <sensor_msgs/image_encodings.hpp>
 #include <sensor_msgs/msg/point_cloud.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <std_msgs/msg/bool.hpp>
 #include <cv_bridge/cv_bridge.h>
+
+#include <atomic>
 
 #include "feature_tracker.h"
 
@@ -14,6 +17,32 @@
 vector<uchar> r_status;
 vector<float> r_err;
 queue<sensor_msgs::msg::Image::ConstPtr> img_buf;
+
+// 图像输入格式:0 = sensor_msgs/msg/Image,1 = sensor_msgs/msg/CompressedImage
+enum ImageFormat
+{
+    FORMAT_RAW = 0,
+    FORMAT_COMPRESSED = 1
+};
+std::atomic<int> image_format{-1};
+
+// 自动判断接收的图像数据格式:首条到达的消息锁定格式,
+// 之后只处理该格式(raw 与 compressed 同时发布时防止重复处理)
+bool acceptImageFormat(int format)
+{
+    int expected = -1;
+    if (image_format.compare_exchange_strong(expected, format))
+        return true;
+    if (image_format.load() != format)
+    {
+        static std::atomic<bool> warned{false};
+        if (!warned.exchange(true))
+            RCUTILS_LOG_WARN("both raw and compressed image streams detected, only the %s stream is processed",
+                             image_format.load() == FORMAT_RAW ? "raw" : "compressed");
+        return false;
+    }
+    return true;
+}
 
 rclcpp::Publisher<sensor_msgs::msg::PointCloud>::SharedPtr pub_img;
 rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_match;
@@ -26,7 +55,7 @@ bool first_image_flag = true;
 double last_image_time = 0;
 bool init_pub = 0;
 
-void img_callback(const sensor_msgs::msg::Image::SharedPtr img_msg)
+void process_image(const sensor_msgs::msg::Image::SharedPtr img_msg)
 {
     if (first_image_flag)
     {
@@ -210,6 +239,32 @@ void img_callback(const sensor_msgs::msg::Image::SharedPtr img_msg)
     // RCUTILS_LOG_INFO("whole feature tracker processing costs: %fms", t_r.toc());
 }
 
+void img_callback(const sensor_msgs::msg::Image::SharedPtr img_msg)
+{
+    if (!acceptImageFormat(FORMAT_RAW))
+        return;
+    process_image(img_msg);
+}
+
+// 兼容 sensor_msgs/msg/CompressedImage。
+// 压缩流(jpeg/png)独立解码:imdecode 直接解码为灰度图,
+// 与 raw 路径的 cv_bridge mono8 转换完全分离
+void compressed_img_callback(const sensor_msgs::msg::CompressedImage::SharedPtr img_msg)
+{
+    if (!acceptImageFormat(FORMAT_COMPRESSED))
+        return;
+    cv::Mat buf(1, img_msg->data.size(), CV_8UC1, const_cast<uint8_t *>(img_msg->data.data()));
+    cv::Mat gray = cv::imdecode(buf, cv::IMREAD_GRAYSCALE);
+    if (gray.empty())
+    {
+        RCUTILS_LOG_ERROR("compressed image decode failed (format: %s)", img_msg->format.c_str());
+        return;
+    }
+    // 包装为 mono8 Image 消息,复用后续特征跟踪处理主体
+    cv_bridge::CvImage cv_img(img_msg->header, sensor_msgs::image_encodings::MONO8, gray);
+    process_image(cv_img.toImageMsg());
+}
+
 int main(int argc, char **argv)
 {
     rclcpp::init(argc, argv);
@@ -234,7 +289,27 @@ int main(int argc, char **argv)
         }
     }
 
-    auto sub_img = n->create_subscription<sensor_msgs::msg::Image>(IMAGE_TOPIC, rclcpp::QoS(rclcpp::KeepLast(100)), img_callback);
+    // 按话题名自动组合 raw 与 compressed 订阅,按实际收到的数据格式自动兼容处理:
+    //   - image_topic 以 "/compressed" 结尾(直接填压缩话题,如 /sensor/camera/front_wide/compressed):
+    //     该话题订阅 CompressedImage,并订阅去掉后缀的 base 话题上的 raw Image
+    //   - 否则(填 base 话题):订阅 image_topic 上的 raw Image,
+    //     以及 image_topic + "/compressed" 上的 CompressedImage(image_transport 命名约定)
+    // 首条到达的消息锁定实际使用的格式(见 acceptImageFormat)
+    std::string raw_topic = IMAGE_TOPIC;
+    std::string compressed_topic = IMAGE_TOPIC;
+    const std::string compressed_suffix = "/compressed";
+    if (raw_topic.size() > compressed_suffix.size() &&
+        raw_topic.compare(raw_topic.size() - compressed_suffix.size(), compressed_suffix.size(), compressed_suffix) == 0)
+    {
+        compressed_topic = raw_topic;
+        raw_topic = raw_topic.substr(0, raw_topic.size() - compressed_suffix.size());
+    }
+    else
+    {
+        compressed_topic = raw_topic + compressed_suffix;
+    }
+    auto sub_img = n->create_subscription<sensor_msgs::msg::Image>(raw_topic, rclcpp::QoS(rclcpp::KeepLast(100)), img_callback);
+    auto sub_img_compressed = n->create_subscription<sensor_msgs::msg::CompressedImage>(compressed_topic, rclcpp::QoS(rclcpp::KeepLast(100)), compressed_img_callback);
 
     pub_img = n->create_publisher<sensor_msgs::msg::PointCloud>("feature", 1000);
     pub_match = n->create_publisher<sensor_msgs::msg::Image>("feature_img", 1000);

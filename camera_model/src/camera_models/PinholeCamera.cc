@@ -19,6 +19,10 @@ PinholeCamera::Parameters::Parameters()
  , m_k2(0.0)
  , m_p1(0.0)
  , m_p2(0.0)
+ , m_k3(0.0)
+ , m_k4(0.0)
+ , m_k5(0.0)
+ , m_k6(0.0)
  , m_fx(0.0)
  , m_fy(0.0)
  , m_cx(0.0)
@@ -32,12 +36,18 @@ PinholeCamera::Parameters::Parameters(const std::string& cameraName,
                                       double k1, double k2,
                                       double p1, double p2,
                                       double fx, double fy,
-                                      double cx, double cy)
+                                      double cx, double cy,
+                                      double k3, double k4,
+                                      double k5, double k6)
  : Camera::Parameters(PINHOLE, cameraName, w, h)
  , m_k1(k1)
  , m_k2(k2)
  , m_p1(p1)
  , m_p2(p2)
+ , m_k3(k3)
+ , m_k4(k4)
+ , m_k5(k5)
+ , m_k6(k6)
  , m_fx(fx)
  , m_fy(fy)
  , m_cx(cx)
@@ -67,6 +77,30 @@ double&
 PinholeCamera::Parameters::p2(void)
 {
     return m_p2;
+}
+
+double&
+PinholeCamera::Parameters::k3(void)
+{
+    return m_k3;
+}
+
+double&
+PinholeCamera::Parameters::k4(void)
+{
+    return m_k4;
+}
+
+double&
+PinholeCamera::Parameters::k5(void)
+{
+    return m_k5;
+}
+
+double&
+PinholeCamera::Parameters::k6(void)
+{
+    return m_k6;
 }
 
 double&
@@ -115,6 +149,30 @@ double
 PinholeCamera::Parameters::p2(void) const
 {
     return m_p2;
+}
+
+double
+PinholeCamera::Parameters::k3(void) const
+{
+    return m_k3;
+}
+
+double
+PinholeCamera::Parameters::k4(void) const
+{
+    return m_k4;
+}
+
+double
+PinholeCamera::Parameters::k5(void) const
+{
+    return m_k5;
+}
+
+double
+PinholeCamera::Parameters::k6(void) const
+{
+    return m_k6;
 }
 
 double
@@ -172,6 +230,11 @@ PinholeCamera::Parameters::readFromYamlFile(const std::string& filename)
     m_k2 = static_cast<double>(n["k2"]);
     m_p1 = static_cast<double>(n["p1"]);
     m_p2 = static_cast<double>(n["p2"]);
+    // OpenCV rational 模型扩展:k3,k4,k5,k6 缺省为 0,兼容不含这些参数的旧配置
+    m_k3 = n["k3"].isNone() ? 0.0 : static_cast<double>(n["k3"]);
+    m_k4 = n["k4"].isNone() ? 0.0 : static_cast<double>(n["k4"]);
+    m_k5 = n["k5"].isNone() ? 0.0 : static_cast<double>(n["k5"]);
+    m_k6 = n["k6"].isNone() ? 0.0 : static_cast<double>(n["k6"]);
 
     n = fs["projection_parameters"];
     m_fx = static_cast<double>(n["fx"]);
@@ -192,13 +255,17 @@ PinholeCamera::Parameters::writeToYamlFile(const std::string& filename) const
     fs << "image_width" << m_imageWidth;
     fs << "image_height" << m_imageHeight;
 
-    // radial distortion: k1, k2
+    // radial distortion: k1, k2 (rational 模型分子项 k3;分母项 k4, k5, k6)
     // tangential distortion: p1, p2
     fs << "distortion_parameters";
     fs << "{" << "k1" << m_k1
               << "k2" << m_k2
               << "p1" << m_p1
-              << "p2" << m_p2 << "}";
+              << "p2" << m_p2
+              << "k3" << m_k3
+              << "k4" << m_k4
+              << "k5" << m_k5
+              << "k6" << m_k6 << "}";
 
     // projection: fx, fy, cx, cy
     fs << "projection_parameters";
@@ -223,6 +290,10 @@ PinholeCamera::Parameters::operator=(const PinholeCamera::Parameters& other)
         m_k2 = other.m_k2;
         m_p1 = other.m_p1;
         m_p2 = other.m_p2;
+        m_k3 = other.m_k3;
+        m_k4 = other.m_k4;
+        m_k5 = other.m_k5;
+        m_k6 = other.m_k6;
         m_fx = other.m_fx;
         m_fy = other.m_fy;
         m_cx = other.m_cx;
@@ -241,13 +312,17 @@ operator<< (std::ostream& out, const PinholeCamera::Parameters& params)
     out << "   image_width " << params.m_imageWidth << std::endl;
     out << "  image_height " << params.m_imageHeight << std::endl;
 
-    // radial distortion: k1, k2
+    // radial distortion: k1, k2 (rational 模型分子项 k3;分母项 k4, k5, k6)
     // tangential distortion: p1, p2
     out << "Distortion Parameters" << std::endl;
     out << "            k1 " << params.m_k1 << std::endl
         << "            k2 " << params.m_k2 << std::endl
         << "            p1 " << params.m_p1 << std::endl
-        << "            p2 " << params.m_p2 << std::endl;
+        << "            p2 " << params.m_p2 << std::endl
+        << "            k3 " << params.m_k3 << std::endl
+        << "            k4 " << params.m_k4 << std::endl
+        << "            k5 " << params.m_k5 << std::endl
+        << "            k6 " << params.m_k6 << std::endl;
 
     // projection: fx, fy, cx, cy
     out << "Projection Parameters" << std::endl;
@@ -279,7 +354,11 @@ PinholeCamera::PinholeCamera(const std::string& cameraName,
     if ((mParameters.k1() == 0.0) &&
         (mParameters.k2() == 0.0) &&
         (mParameters.p1() == 0.0) &&
-        (mParameters.p2() == 0.0))
+        (mParameters.p2() == 0.0) &&
+        (mParameters.k3() == 0.0) &&
+        (mParameters.k4() == 0.0) &&
+        (mParameters.k5() == 0.0) &&
+        (mParameters.k6() == 0.0))
     {
         m_noDistortion = true;
     }
@@ -301,7 +380,11 @@ PinholeCamera::PinholeCamera(const PinholeCamera::Parameters& params)
     if ((mParameters.k1() == 0.0) &&
         (mParameters.k2() == 0.0) &&
         (mParameters.p1() == 0.0) &&
-        (mParameters.p2() == 0.0))
+        (mParameters.p2() == 0.0) &&
+        (mParameters.k3() == 0.0) &&
+        (mParameters.k4() == 0.0) &&
+        (mParameters.k5() == 0.0) &&
+        (mParameters.k6() == 0.0))
     {
         m_noDistortion = true;
     }
@@ -488,20 +571,114 @@ PinholeCamera::liftProjective(const Eigen::Vector2d& p, Eigen::Vector3d& P) cons
         }
         else
         {
-            // Recursive distortion model
-            int n = 8;
-            Eigen::Vector2d d_u;
-            distortion(Eigen::Vector2d(mx_d, my_d), d_u);
-            // Approximate value
-            mx_u = mx_d - d_u(0);
-            my_u = my_d - d_u(1);
+            // 去畸变求解 p_u + d(p_u) = p_d。
+            // 强畸变(如 rational 模型)下,从畸变点出发的不动点迭代或纯牛顿法
+            // 都可能不收敛(OpenCV undistortPoints 亦如此),这里改为:
+            //   1) 在径向映射 r_u -> r_d 的第一段(从 0 开始、先单调上升)内
+            //      扫描 + 二分求解径向方程 r_u*(1+N)/D = r_d,得到可靠初值;
+            //   2) 用解析雅可比的牛顿迭代精化(覆盖切向项)。
+            // 若 r_d 超出模型可达范围(径向映射越过峰值后回落,rational 分母
+            // 会出现极点),则把 r_u 夹取到峰值半径,保证输出有限且连续。
+            Eigen::Vector2d p_d(mx_d, my_d);
+            Eigen::Vector2d p_u = p_d;
 
-            for (int i = 1; i < n; ++i)
+            double k1 = mParameters.k1();
+            double k2 = mParameters.k2();
+            double p1 = mParameters.p1();
+            double p2 = mParameters.p2();
+            double k3 = mParameters.k3();
+            double k4 = mParameters.k4();
+            double k5 = mParameters.k5();
+            double k6 = mParameters.k6();
+
+            // 径向畸变映射 r_u -> r_d(忽略切向项)
+            auto radialDistort = [&](double r) {
+                double r2 = r * r;
+                double r4 = r2 * r2;
+                double r6 = r4 * r2;
+                double num = k1 * r2 + k2 * r4 + k3 * r6;
+                double den = 1.0 + k4 * r2 + k5 * r4 + k6 * r6;
+                if (fabs(den) < 1e-12)
+                    den = 1.0;
+                return r * (1.0 + num) / den;
+            };
+
+            double r_d = p_d.norm();
+            if (r_d > 1e-12)
             {
-                distortion(Eigen::Vector2d(mx_u, my_u), d_u);
-                mx_u = mx_d - d_u(0);
-                my_u = my_d - d_u(1);
+                // 在第一段内扫描:lo 为最后一个 f(lo) < r_d 的半径,hi 为第一个
+                // f(hi) >= r_d 的半径;同时跟踪峰值,用于无解时夹取。
+                // 一旦越过径向映射峰值(f 开始下降),即可断定后续(含极点)
+                // 不存在有效根,必须先于 f>=r_d 判断,避免采到极点右侧。
+                double lo = 0.0;
+                double hi = -1.0;
+                double r_peak = 0.0, f_peak = 0.0;
+                double step = 0.02 * std::max(r_d, 1.0);
+                for (double r = step; r < 1e2; r += step)
+                {
+                    double f = radialDistort(r);
+                    if (f < 0.0 || fabs(f) > 1e6)
+                        break;  // 映射变负/爆炸:超出模型有效域
+                    if (f > f_peak)
+                    {
+                        f_peak = f;
+                        r_peak = r;
+                    }
+                    else if (r > r_peak && f < f_peak * (1.0 - 1e-6))
+                    {
+                        break;  // 已越过峰值且开始下降:第一段内无根
+                    }
+                    if (f >= r_d)
+                    {
+                        hi = r;
+                        break;
+                    }
+                    lo = r;
+                }
+
+                if (hi > 0.0)
+                {
+                    // 二分求根
+                    for (int i = 0; i < 50; ++i)
+                    {
+                        double mid = 0.5 * (lo + hi);
+                        if (radialDistort(mid) < r_d)
+                            lo = mid;
+                        else
+                            hi = mid;
+                    }
+                    p_u = p_d * (0.5 * (lo + hi) / r_d);
+
+                    // 牛顿迭代精化(含切向项)。注意 distortion() 的雅可比版本
+                    // 返回的是前向映射 p_u -> p_d 的完整雅可比(已含单位阵)
+                    Eigen::Vector2d d_u;
+                    Eigen::Matrix2d J;
+                    distortion(p_u, d_u, J);
+                    for (int i = 0; i < 10; ++i)
+                    {
+                        Eigen::Vector2d F = p_u + d_u - p_d;
+                        double det = J.determinant();
+                        if (fabs(det) < 1e-12)
+                            break;
+                        Eigen::Matrix2d J_inv;
+                        J_inv <<  J(1,1), -J(0,1),
+                                 -J(1,0),  J(0,0);
+                        Eigen::Vector2d step_n = (1.0 / det) * (J_inv * F);
+                        p_u -= step_n;
+                        if (step_n.norm() < 1e-15)
+                            break;
+                        distortion(p_u, d_u, J);
+                    }
+                }
+                else
+                {
+                    // r_d 超出模型可达范围(极端边角):夹取到峰值半径
+                    p_u = p_d * (r_peak / r_d);
+                }
             }
+
+            mx_u = p_u(0);
+            my_u = p_u(1);
         }
     }
 
@@ -649,6 +826,10 @@ PinholeCamera::distortion(const Eigen::Vector2d& p_u, Eigen::Vector2d& d_u) cons
     double k2 = mParameters.k2();
     double p1 = mParameters.p1();
     double p2 = mParameters.p2();
+    double k3 = mParameters.k3();
+    double k4 = mParameters.k4();
+    double k5 = mParameters.k5();
+    double k6 = mParameters.k6();
 
     double mx2_u, my2_u, mxy_u, rho2_u, rad_dist_u;
 
@@ -656,7 +837,20 @@ PinholeCamera::distortion(const Eigen::Vector2d& p_u, Eigen::Vector2d& d_u) cons
     my2_u = p_u(1) * p_u(1);
     mxy_u = p_u(0) * p_u(1);
     rho2_u = mx2_u + my2_u;
-    rad_dist_u = k1 * rho2_u + k2 * rho2_u * rho2_u;
+
+    // OpenCV rational 畸变模型(k1,k2,k3 为分子径向项,k4,k5,k6 为分母项):
+    // p_d = p_u * (1 + k1*r² + k2*r⁴ + k3*r⁶) / (1 + k4*r² + k5*r⁴ + k6*r⁶) + 切向项
+    // 保持 p_d = p_u + d_u 的结构,即 d_u = p_u * rad_dist_u + 切向项,
+    // 其中 rad_dist_u = ((1+num)/den - 1) = (num - (den-1)) / den;
+    // k3~k6 均为 0 时退化为原 5 参数模型(k1*r² + k2*r⁴)
+    double rho4_u = rho2_u * rho2_u;
+    double rho6_u = rho4_u * rho2_u;
+    double num = k1 * rho2_u + k2 * rho4_u + k3 * rho6_u;
+    double den = 1.0 + k4 * rho2_u + k5 * rho4_u + k6 * rho6_u;
+    if (fabs(den) < 1e-12)
+        den = 1.0;
+    rad_dist_u = (num - (den - 1.0)) / den;
+
     d_u << p_u(0) * rad_dist_u + 2.0 * p1 * mxy_u + p2 * (rho2_u + 2.0 * mx2_u),
            p_u(1) * rad_dist_u + 2.0 * p2 * mxy_u + p1 * (rho2_u + 2.0 * my2_u);
 }
@@ -676,6 +870,10 @@ PinholeCamera::distortion(const Eigen::Vector2d& p_u, Eigen::Vector2d& d_u,
     double k2 = mParameters.k2();
     double p1 = mParameters.p1();
     double p2 = mParameters.p2();
+    double k3 = mParameters.k3();
+    double k4 = mParameters.k4();
+    double k5 = mParameters.k5();
+    double k6 = mParameters.k6();
 
     double mx2_u, my2_u, mxy_u, rho2_u, rad_dist_u;
 
@@ -683,14 +881,31 @@ PinholeCamera::distortion(const Eigen::Vector2d& p_u, Eigen::Vector2d& d_u,
     my2_u = p_u(1) * p_u(1);
     mxy_u = p_u(0) * p_u(1);
     rho2_u = mx2_u + my2_u;
-    rad_dist_u = k1 * rho2_u + k2 * rho2_u * rho2_u;
+
+    // OpenCV rational 畸变模型(与无雅可比版本 distortion() 一致)
+    double rho4_u = rho2_u * rho2_u;
+    double rho6_u = rho4_u * rho2_u;
+    double num = k1 * rho2_u + k2 * rho4_u + k3 * rho6_u;
+    double den = 1.0 + k4 * rho2_u + k5 * rho4_u + k6 * rho6_u;
+    if (fabs(den) < 1e-12)
+        den = 1.0;
+    rad_dist_u = (num - (den - 1.0)) / den;
     d_u << p_u(0) * rad_dist_u + 2.0 * p1 * mxy_u + p2 * (rho2_u + 2.0 * mx2_u),
            p_u(1) * rad_dist_u + 2.0 * p2 * mxy_u + p1 * (rho2_u + 2.0 * my2_u);
 
-    double dxdmx = 1.0 + rad_dist_u + k1 * 2.0 * mx2_u + k2 * rho2_u * 4.0 * mx2_u + 2.0 * p1 * p_u(1) + 6.0 * p2 * p_u(0);
-    double dydmx = k1 * 2.0 * p_u(0) * p_u(1) + k2 * 4.0 * rho2_u * p_u(0) * p_u(1) + p1 * 2.0 * p_u(0) + 2.0 * p2 * p_u(1);
-    double dxdmy = dydmx;
-    double dydmy = 1.0 + rad_dist_u + k1 * 2.0 * my2_u + k2 * rho2_u * 4.0 * my2_u + 6.0 * p1 * p_u(1) + 2.0 * p2 * p_u(0);
+    // rad_dist 对 x/y 的导数(商法则),分子为 (num - (den-1))
+    double dnum_dx = ((k1 - k4) + 2.0 * (k2 - k5) * rho2_u + 3.0 * (k3 - k6) * rho4_u) * 2.0 * p_u(0);
+    double dnum_dy = ((k1 - k4) + 2.0 * (k2 - k5) * rho2_u + 3.0 * (k3 - k6) * rho4_u) * 2.0 * p_u(1);
+    double dden_dx = (k4 + 2.0 * k5 * rho2_u + 3.0 * k6 * rho4_u) * 2.0 * p_u(0);
+    double dden_dy = (k4 + 2.0 * k5 * rho2_u + 3.0 * k6 * rho4_u) * 2.0 * p_u(1);
+    double den2 = den * den;
+    double drad_dx = (dnum_dx * den - (num - (den - 1.0)) * dden_dx) / den2;
+    double drad_dy = (dnum_dy * den - (num - (den - 1.0)) * dden_dy) / den2;
+
+    double dxdmx = 1.0 + rad_dist_u + p_u(0) * drad_dx + 2.0 * p1 * p_u(1) + 6.0 * p2 * p_u(0);
+    double dydmx = p_u(1) * drad_dx + p1 * 2.0 * p_u(0) + 2.0 * p2 * p_u(1);
+    double dxdmy = p_u(0) * drad_dy + 2.0 * p1 * p_u(0) + p2 * 2.0 * p_u(1);
+    double dydmy = 1.0 + rad_dist_u + p_u(1) * drad_dy + 6.0 * p1 * p_u(1) + 2.0 * p2 * p_u(0);
 
     J << dxdmx, dxdmy,
          dydmx, dydmy;
@@ -812,7 +1027,11 @@ PinholeCamera::setParameters(const PinholeCamera::Parameters& parameters)
     if ((mParameters.k1() == 0.0) &&
         (mParameters.k2() == 0.0) &&
         (mParameters.p1() == 0.0) &&
-        (mParameters.p2() == 0.0))
+        (mParameters.p2() == 0.0) &&
+        (mParameters.k3() == 0.0) &&
+        (mParameters.k4() == 0.0) &&
+        (mParameters.k5() == 0.0) &&
+        (mParameters.k6() == 0.0))
     {
         m_noDistortion = true;
     }
