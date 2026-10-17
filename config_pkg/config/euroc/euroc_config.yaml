@@ -38,6 +38,9 @@ extrinsicRotation: !!opencv-matrix
    data: [0.003897, -0.239846, 0.970803,
       -0.999930, -0.011804, 0.001098,
        0.011196, -0.970739, -0.239875]
+   # data: [-0.003897,  0.999930,  0.011196,
+   #        0.239846,  0.011804, -0.970739,
+   #       -0.970803, -0.001098, -0.239875]
 #Translation from camera frame to imu frame, imu^T_cam
 extrinsicTranslation: !!opencv-matrix
    rows: 3
@@ -67,10 +70,10 @@ gyr_w: 2.0e-6       # gyroscope bias random work noise standard deviation.     #
 g_norm: 9.81007     # gravity magnitude
 
 #loop closure parameters
-loop_closure: 1                    # start loop closure
+loop_closure: 0                    # start loop closure
 load_previous_pose_graph: 0        # load and reuse previous pose graph; load from 'pose_graph_save_path'
 fast_relocalization: 0             # useful in real-time and large project
-pose_graph_save_path: "/workspace/vins_mono/output/" # save and load path
+pose_graph_save_path: "/workspace/vins_mono/output" # save and load path
 support_path: "/workspace/vins_mono/src/VINS-MONO-ROS2/config_pkg/support_files"
 
 #unsynchronization parameters
