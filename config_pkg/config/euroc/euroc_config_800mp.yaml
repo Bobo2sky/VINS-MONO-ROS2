@@ -13,7 +13,7 @@ imu_sub_qos:
    reliability: "best_effort"   # "reliable" | "best_effort"
    depth: 2000
 
-output_path: "/workspace/vins_mono/output/"
+output_path: "/workspace/vins_vio/output/"
 
 #camera calibration 
 model_type: PINHOLE
@@ -77,11 +77,11 @@ gyr_w: 2.0e-6       # gyroscope bias random work noise standard deviation.     #
 g_norm: 9.81007     # gravity magnitude
 
 #loop closure parameters
-loop_closure: 1                    # start loop closure
+loop_closure: 0                    # start loop closure
 load_previous_pose_graph: 0        # load and reuse previous pose graph; load from 'pose_graph_save_path'
 fast_relocalization: 0             # useful in real-time and large project
-pose_graph_save_path: "/workspace/vins_mono/output/" # save and load path
-support_path: "/workspace/vins_mono/src/VINS-MONO-ROS2/config_pkg/support_files"
+pose_graph_save_path: "/workspace/vins_vio/output/" # save and load path
+support_path: "/workspace/vins_vio/src/VINS-MONO-ROS2/config_pkg/support_files"
 
 #unsynchronization parameters
 estimate_td: 0                      # online estimate time offset between camera and imu
