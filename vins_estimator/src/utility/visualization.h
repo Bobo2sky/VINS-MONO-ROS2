@@ -10,7 +10,7 @@
 #include <sensor_msgs/image_encodings.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <nav_msgs/msg/odometry.hpp>
-#include <geometry_msgs/msg/point_stamped.h>
+#include <geometry_msgs/msg/point_stamped.hpp>
 #include <visualization_msgs/msg/marker.h>
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf2/LinearMath/Quaternion.h>
@@ -30,6 +30,7 @@ extern rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pub_key_pos
 extern rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_relo_relative_pose;
 extern rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_camera_pose;
 extern rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_camera_pose_visual;
+extern rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr pub_total_mileage;
 extern nav_msgs::msg::Path path;
 
 void registerPub(rclcpp::Node::SharedPtr n);

@@ -31,9 +31,9 @@ colcon build
 ## 数据流(核心链路)
 
 ```text
-图像话题 (raw Image 或 CompressedImage)
+图像话题 (按 yaml 的 image_type 订阅 raw Image 或 CompressedImage)
   └─ feature_tracker/src/feature_tracker_node.cpp
-       img_callback / compressed_img_callback(双格式自动兼容,见下节)
+       img_callback / compressed_img_callback(由 image_type 决定,见下节)
        → cv_bridge 转 mono8 → FeatureTracker::readImage (feature_tracker.cpp)
          (CLAHE 可选均衡 / LK 光流 / rejectWithF / setMask / goodFeaturesToTrack)
        → undistortedPoints() 经 camodocal 相机模型去畸变(归一化坐标)
@@ -69,8 +69,8 @@ IMU 话题 (/imu0)
 
 | 话题 | 类型 | 方向 | 说明 |
 | --- | --- | --- | --- |
-| `<image_topic>`(base 话题) | `sensor_msgs/msg/Image` | 输入 | 原始灰度图,cv_bridge 转 mono8 |
-| `<image_topic>/compressed` | `sensor_msgs/msg/CompressedImage` | 输入 | jpeg/png 压缩图,`cv::imdecode` 独立解码;与 raw 首条锁定格式(见上节) |
+| `<image_topic>`(`image_type: raw` 时) | `sensor_msgs/msg/Image` | 输入 | 原始灰度图,cv_bridge 转 mono8;QoS 由 `image_sub_qos` 配置 |
+| `<image_topic>/compressed`(`image_type: compressed` 时) | `sensor_msgs/msg/CompressedImage` | 输入 | jpeg/png 压缩图,`cv::imdecode` 独立解码;QoS 由 `image_sub_qos` 配置 |
 | `/feature_tracker/feature` | `sensor_msgs/msg/PointCloud` | 输出 | 特征点:points(x, y, 1) 为去畸变归一化坐标;channels 依次为 `id`(全局特征 ID)、`u`/`v`(像素坐标)、`velocity_x`/`velocity_y`(归一化平面速度) |
 | `/feature_tracker/feature_img` | `sensor_msgs/msg/Image` | 输出 | 特征跟踪可视化(RGB,按跟踪长度渐变色);仅 `show_track: 1` 时发布 |
 | `/feature_tracker/restart` | `std_msgs/msg/Bool` | 输出 | 图像时间戳跳变/回退时置 true,通知 estimator 重置 |
@@ -79,11 +79,12 @@ IMU 话题 (/imu0)
 
 | 话题 | 类型 | 方向 | 说明 |
 | --- | --- | --- | --- |
-| `<imu_topic>` | `sensor_msgs/msg/Imu` | 输入 | IMU 原始数据 |
+| `<imu_topic>` | `sensor_msgs/msg/Imu` | 输入 | IMU 原始数据;QoS 由 `imu_sub_qos` 配置 |
 | `/feature_tracker/feature` | `sensor_msgs/msg/PointCloud` | 输入 | 特征点(见上表) |
 | `/feature_tracker/restart` | `std_msgs/msg/Bool` | 输入 | 重置信号 |
 | `/pose_graph/match_points` | `sensor_msgs/msg/PointCloud` | 输入 | 快速重定位约束(仅 `fast_relocalization: 1` 时有数据) |
 | `/vins_estimator/imu_propagate` | `nav_msgs/msg/Odometry` | 输出 | IMU 前向传播高频里程计:pose 为 world 系姿态/位置,twist 为体系速度 + 陀螺原始角速度 |
+| `/vins_estimator/total_mileage` | `geometry_msgs/msg/PointStamped` | 输出 | VIO 总里程(米):`point.x` 存累计路径长度,stamp 为图像帧时间;首帧不计原点偏移,帧间跳变 >10m 不累加(重置保护) |
 | `/vins_estimator/odometry` | `nav_msgs/msg/Odometry` | 输出 | 滑窗优化后的 VIO 里程计(world 系,每图像帧一次) |
 | `/vins_estimator/path` | `nav_msgs/msg/Path` | 输出 | 滑窗位姿轨迹(world 系) |
 | `/vins_estimator/relocalization_path` | `nav_msgs/msg/Path` | 输出 | 漂移校正后的重定位轨迹 |
@@ -97,13 +98,13 @@ IMU 话题 (/imu0)
 | `/vins_estimator/extrinsic` | `nav_msgs/msg/Odometry` | 输出 | 在线估计的相机-IMU 外参(pose 字段存 RIC/tic) |
 | `/vins_estimator/relo_relative_pose` | `nav_msgs/msg/Odometry` | 输出 | 重定位时滑窗首帧相对回环帧的位姿 |
 
-TF 广播:`world → body`(imu_propagate / odometry 均刷新)、`world → camera`。
+TF 广播:`world → body` 与 `world → camera`(均在 pubOdometry 同路径刷新,每图像帧一次,stamp 为图像帧时间)。
 
 ### pose_graph
 
 | 话题 | 类型 | 方向 | 说明 |
 | --- | --- | --- | --- |
-| `<image_topic>`(raw + compressed 双格式) | `sensor_msgs/msg/Image` + `CompressedImage` | 输入 | 关键帧原始图像,双格式机制同 feature_tracker |
+| `<image_topic>`(按 `image_type` 单一格式) | `sensor_msgs/msg/Image` 或 `CompressedImage` | 输入 | 关键帧原始图像,订阅机制同 feature_tracker |
 | `/vins_estimator/imu_propagate` | `nav_msgs/msg/Odometry` | 输入 | fast relocalization 时更新旧关键帧初始位姿 |
 | `/vins_estimator/odometry` | `nav_msgs/msg/Odometry` | 输入 | VIO 里程计(持续更新关键帧 VIO 位姿 / 绘制 no_loop_path) |
 | `/vins_estimator/keyframe_pose` | `nav_msgs/msg/Odometry` | 输入 | 触发建立关键帧 |
@@ -125,18 +126,18 @@ TF 广播:`world → body`(imu_propagate / odometry 均刷新)、`world → came
 - `benchmark_publisher`:输入 `/vins_estimator/odometry`(时间对齐用);输出 `benchmark_publisher/odometry` / `path`(EuRoC 真值)
 - `ar_demo`:输入 `/vins_estimator/camera_pose` + `/vins_estimator/point_cloud`(及图像话题);输出 `ar_demo/AR_object`(`visualization_msgs/msg/MarkerArray`)
 
-## 图像输入接口(raw / compressed 双格式自动兼容)
+## 图像/IMU 输入接口(image_type 选择格式 + QoS 配置)
 
-`feature_tracker` 与 `pose_graph` 按配置的 `image_topic` 话题名自动组合订阅:
+`feature_tracker` 与 `pose_graph` 按 yaml 的 `image_type` **只订阅一种**图像话题:
 
-- `image_topic` 填 **base 话题**(如 `/sensor/camera/front_wide`):订阅其上的 `sensor_msgs/msg/Image`(raw),以及 `image_topic + "/compressed"` 上的 `sensor_msgs/msg/CompressedImage`(image_transport 命名约定)
-- `image_topic` 直接填**压缩话题**(如 `/sensor/camera/front_wide/compressed`):该话题订阅 `CompressedImage`,同时订阅去掉 `/compressed` 后缀的 base 话题上的 raw 流
+- `image_type: "raw"`(缺省):订阅 base 话题上的 `sensor_msgs/msg/Image`
+- `image_type: "compressed"`:订阅 base 话题 + `/compressed`(image_transport 命名约定)上的 `sensor_msgs/msg/CompressedImage`
+- `image_topic` 若已带 `/compressed` 后缀会先剥离得到 base 话题;`image_type` 非法值 WARN 后按 raw 处理
 
-处理行为(见 `feature_tracker_node.cpp` / `pose_graph_node.cpp` 中的 `acceptImageFormat`):
+处理行为(见 `feature_tracker_node.cpp` / `pose_graph_node.cpp`):
 
-- **首条到达的消息锁定格式**,之后只处理该格式;两种流同时存在时,后到的被忽略并 WARN 一次(防止重复处理)
 - raw 路径:cv_bridge 转 mono8(含 `8UC1` 特判);压缩路径:`cv::imdecode` 直接解码为灰度图(jpeg/png 均可,解码失败丢帧并记 ERROR)——两条路径完全独立
-- IMU 输入接口不变(sensor_msgs/msg/Imu)
+- 图像与 IMU 订阅 QoS 由 yaml 的 `image_sub_qos` / `imu_sub_qos` 配置(`reliability: reliable|best_effort` + `depth`),缺省为 reliable:图像 depth 100(feature_tracker)/ 2000(pose_graph),IMU depth 2000
 
 ## 图像频率说明(10Hz 相机)
 
@@ -152,6 +153,8 @@ TF 广播:`world → body`(imu_propagate / odometry 均刷新)、`world → came
 ## 配置说明(config_pkg/config/euroc/euroc_config.yaml)
 
 - `imu_topic` / `image_topic`:输入话题;`output_path`:输出目录
+- `image_type`:图像输入格式 `"raw"` / `"compressed"`(决定唯一订阅的图像话题,见「图像/IMU 输入接口」节)
+- `image_sub_qos` / `imu_sub_qos`:订阅 QoS(`reliability: reliable|best_effort`、`depth`),分别作用于图像与 IMU 订阅
 - 相机模型:`model_type: PINHOLE`(可选 MEI / KANNALA_BRANDT / SCARAMUZZA,由 `camera_model` 包 `CameraFactory` 按 yaml 分发)
   - PINHOLE 畸变参数支持 **k1, k2, p1, p2, k3, k4, k5, k6**(OpenCV rational 模型:k1/k2/k3 为分子径向项,k4/k5/k6 为分母项);k3~k6 缺省为 0,兼容旧 5 参数配置
   - 内参:`projection_parameters: fx/fy/cx/cy`;`image_width/height` 决定 feature tracker 的 ROW/COL

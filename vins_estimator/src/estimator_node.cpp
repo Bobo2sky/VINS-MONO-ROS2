@@ -347,8 +347,7 @@ int main(int argc, char **argv)
 
     registerPub(n);
 
-    // 传感器外部输入用 best_effort:兼容 BEST_EFFORT 发布者(如 rosbag2 回放/部分驱动),也能收 RELIABLE 流
-    auto sub_imu = n->create_subscription<sensor_msgs::msg::Imu>(IMU_TOPIC, rclcpp::QoS(rclcpp::KeepLast(2000)).best_effort(), imu_callback);
+    auto sub_imu = n->create_subscription<sensor_msgs::msg::Imu>(IMU_TOPIC, IMU_SUB_QOS, imu_callback);
     auto sub_image = n->create_subscription<sensor_msgs::msg::PointCloud>("/feature_tracker/feature", rclcpp::QoS(rclcpp::KeepLast(2000)), feature_callback);
     auto sub_restart = n->create_subscription<std_msgs::msg::Bool>("/feature_tracker/restart", rclcpp::QoS(rclcpp::KeepLast(2000)), restart_callback);
     auto sub_relo_points = n->create_subscription<sensor_msgs::msg::PointCloud>("/pose_graph/match_points", rclcpp::QoS(rclcpp::KeepLast(2000)), relocalization_callback);
