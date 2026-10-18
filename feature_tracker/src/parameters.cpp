@@ -2,6 +2,10 @@
 
 std::string IMAGE_TOPIC;
 std::string IMU_TOPIC;
+// 图像输入模式:"raw" = sensor_msgs/msg/Image,"compressed" = sensor_msgs/msg/CompressedImage
+std::string IMAGE_TYPE;
+// 图像订阅 QoS(由 yaml 的 image_sub_qos 配置)
+rclcpp::QoS IMAGE_SUB_QOS{rclcpp::KeepLast(100)};
 std::vector<std::string> CAM_NAMES;
 std::string FISHEYE_MASK;
 int MAX_CNT;
@@ -36,6 +40,28 @@ T readParam(rclcpp::Node::SharedPtr n, std::string name)
     return ans;
 }
 
+// 从 yaml 的 <name> 节点解析订阅 QoS(reliability / depth),
+// 缺省为 reliable + KeepLast(default_depth)
+static rclcpp::QoS readSubQos(cv::FileStorage &fsSettings, const std::string &name, int default_depth)
+{
+    cv::FileNode node = fsSettings[name];
+    int depth = default_depth;
+    std::string reliability = "reliable";
+    if (!node.empty())
+    {
+        if (!node["depth"].empty())
+            depth = (int)node["depth"];
+        if (!node["reliability"].empty())
+            node["reliability"] >> reliability;
+    }
+    rclcpp::QoS qos{rclcpp::KeepLast(depth)};
+    if (reliability == "best_effort")
+        qos.best_effort();
+    else
+        qos.reliable();
+    return qos;
+}
+
 void readParameters(rclcpp::Node::SharedPtr &n)
 {
     std::string config_file;
@@ -50,6 +76,16 @@ void readParameters(rclcpp::Node::SharedPtr &n)
 
     fsSettings["image_topic"] >> IMAGE_TOPIC;
     fsSettings["imu_topic"] >> IMU_TOPIC;
+    // 图像输入模式与订阅 QoS(image_type 非法或缺省时按 raw 处理)
+    IMAGE_TYPE = "raw";
+    if (!fsSettings["image_type"].empty())
+        fsSettings["image_type"] >> IMAGE_TYPE;
+    if (IMAGE_TYPE != "raw" && IMAGE_TYPE != "compressed")
+    {
+        RCUTILS_LOG_WARN("unknown image_type: %s, fall back to raw", IMAGE_TYPE.c_str());
+        IMAGE_TYPE = "raw";
+    }
+    IMAGE_SUB_QOS = readSubQos(fsSettings, "image_sub_qos", 100);
     MAX_CNT = fsSettings["max_cnt"];
     MIN_DIST = fsSettings["min_dist"];
     ROW = fsSettings["image_height"];

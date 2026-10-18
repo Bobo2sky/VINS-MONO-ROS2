@@ -20,6 +20,8 @@ int ROLLING_SHUTTER;
 std::string EX_CALIB_RESULT_PATH;
 std::string VINS_RESULT_PATH;
 std::string IMU_TOPIC;
+// IMU 订阅 QoS(由 yaml 的 imu_sub_qos 配置)
+rclcpp::QoS IMU_SUB_QOS{rclcpp::KeepLast(2000)};
 double ROW, COL;
 double TD, TR;
 
@@ -41,6 +43,28 @@ T readParam(rclcpp::Node::SharedPtr n, std::string name)
     return ans;
 }
 
+// 从 yaml 的 <name> 节点解析订阅 QoS(reliability / depth),
+// 缺省为 reliable + KeepLast(default_depth)
+static rclcpp::QoS readSubQos(cv::FileStorage &fsSettings, const std::string &name, int default_depth)
+{
+    cv::FileNode node = fsSettings[name];
+    int depth = default_depth;
+    std::string reliability = "reliable";
+    if (!node.empty())
+    {
+        if (!node["depth"].empty())
+            depth = (int)node["depth"];
+        if (!node["reliability"].empty())
+            node["reliability"] >> reliability;
+    }
+    rclcpp::QoS qos{rclcpp::KeepLast(depth)};
+    if (reliability == "best_effort")
+        qos.best_effort();
+    else
+        qos.reliable();
+    return qos;
+}
+
 void readParameters(rclcpp::Node::SharedPtr n)
 {
     std::string config_file;
@@ -52,6 +76,8 @@ void readParameters(rclcpp::Node::SharedPtr n)
     }
 
     fsSettings["imu_topic"] >> IMU_TOPIC;
+    // IMU 订阅 QoS(yaml 的 imu_sub_qos,缺省 reliable + KeepLast(2000))
+    IMU_SUB_QOS = readSubQos(fsSettings, "imu_sub_qos", 2000);
 
     SOLVER_TIME = fsSettings["max_solver_time"];
     NUM_ITERATIONS = fsSettings["max_num_iterations"];

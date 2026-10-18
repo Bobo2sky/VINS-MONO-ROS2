@@ -33,6 +33,7 @@ extern int NUM_ITERATIONS;
 extern std::string EX_CALIB_RESULT_PATH;
 extern std::string VINS_RESULT_PATH;
 extern std::string IMU_TOPIC;
+extern rclcpp::QoS IMU_SUB_QOS;
 extern double TD;
 extern double TR;
 extern int ESTIMATE_TD;

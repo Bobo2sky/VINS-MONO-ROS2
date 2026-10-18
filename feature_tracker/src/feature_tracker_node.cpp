@@ -289,27 +289,29 @@ int main(int argc, char **argv)
         }
     }
 
-    // 按话题名自动组合 raw 与 compressed 订阅,按实际收到的数据格式自动兼容处理:
-    //   - image_topic 以 "/compressed" 结尾(直接填压缩话题,如 /sensor/camera/front_wide/compressed):
-    //     该话题订阅 CompressedImage,并订阅去掉后缀的 base 话题上的 raw Image
-    //   - 否则(填 base 话题):订阅 image_topic 上的 raw Image,
-    //     以及 image_topic + "/compressed" 上的 CompressedImage(image_transport 命名约定)
-    // 首条到达的消息锁定实际使用的格式(见 acceptImageFormat)
-    std::string raw_topic = IMAGE_TOPIC;
-    std::string compressed_topic = IMAGE_TOPIC;
+    // 按 image_type 只订阅一种图像话题(见 parameters 中 IMAGE_TYPE):
+    //   - "compressed":订阅 base + "/compressed" 上的 CompressedImage
+    //   - "raw":订阅 base 话题上的 sensor_msgs/msg/Image
+    // image_topic 若已带 "/compressed" 后缀则先剥离得到 base 话题;
+    // 订阅 QoS 由 yaml 的 image_sub_qos 配置
+    std::string base_topic = IMAGE_TOPIC;
     const std::string compressed_suffix = "/compressed";
-    if (raw_topic.size() > compressed_suffix.size() &&
-        raw_topic.compare(raw_topic.size() - compressed_suffix.size(), compressed_suffix.size(), compressed_suffix) == 0)
+    if (base_topic.size() > compressed_suffix.size() &&
+        base_topic.compare(base_topic.size() - compressed_suffix.size(), compressed_suffix.size(), compressed_suffix) == 0)
     {
-        compressed_topic = raw_topic;
-        raw_topic = raw_topic.substr(0, raw_topic.size() - compressed_suffix.size());
+        base_topic = base_topic.substr(0, base_topic.size() - compressed_suffix.size());
+    }
+    rclcpp::SubscriptionBase::SharedPtr sub_img;
+    if (IMAGE_TYPE == "compressed")
+    {
+        RCUTILS_LOG_INFO("subscribe compressed image: %s", (base_topic + compressed_suffix).c_str());
+        sub_img = n->create_subscription<sensor_msgs::msg::CompressedImage>(base_topic + compressed_suffix, IMAGE_SUB_QOS, compressed_img_callback);
     }
     else
     {
-        compressed_topic = raw_topic + compressed_suffix;
+        RCUTILS_LOG_INFO("subscribe raw image: %s", base_topic.c_str());
+        sub_img = n->create_subscription<sensor_msgs::msg::Image>(base_topic, IMAGE_SUB_QOS, img_callback);
     }
-    auto sub_img = n->create_subscription<sensor_msgs::msg::Image>(raw_topic, rclcpp::QoS(rclcpp::KeepLast(100)), img_callback);
-    auto sub_img_compressed = n->create_subscription<sensor_msgs::msg::CompressedImage>(compressed_topic, rclcpp::QoS(rclcpp::KeepLast(100)), compressed_img_callback);
 
     pub_img = n->create_publisher<sensor_msgs::msg::PointCloud>("feature", 1000);
     pub_match = n->create_publisher<sensor_msgs::msg::Image>("feature_img", 1000);

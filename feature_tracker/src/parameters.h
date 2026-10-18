@@ -10,6 +10,8 @@ const int NUM_OF_CAM = 1;
 
 extern std::string IMAGE_TOPIC;
 extern std::string IMU_TOPIC;
+extern std::string IMAGE_TYPE;
+extern rclcpp::QoS IMAGE_SUB_QOS;
 extern std::string FISHEYE_MASK;
 extern std::vector<std::string> CAM_NAMES;
 extern int MAX_CNT;

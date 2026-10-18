@@ -17,6 +17,7 @@ nav_msgs::msg::Path path, relo_path;
 rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_keyframe_pose;
 rclcpp::Publisher<sensor_msgs::msg::PointCloud>::SharedPtr pub_keyframe_point;
 rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_extrinsic;
+rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr pub_total_mileage;
 
 CameraPoseVisualization cameraposevisual(0, 1, 0, 1);
 CameraPoseVisualization keyframebasevisual(0.0, 0.0, 1.0, 1.0);
@@ -41,6 +42,8 @@ void registerPub(rclcpp::Node::SharedPtr n)
     pub_keyframe_point = n->create_publisher<sensor_msgs::msg::PointCloud>("keyframe_point", 1000);
     pub_extrinsic = n->create_publisher<nav_msgs::msg::Odometry>("extrinsic", 1000);
     pub_relo_relative_pose=  n->create_publisher<nav_msgs::msg::Odometry>("relo_relative_pose", 1000);
+    // 总里程(米):point.x 存累计值,stamp 为图像帧时间
+    pub_total_mileage = n->create_publisher<geometry_msgs::msg::PointStamped>("total_mileage", 1000);
 
     br = std::make_shared<tf2_ros::TransformBroadcaster>(n);
 
@@ -105,7 +108,17 @@ void printStatistics(const Estimator &estimator, double t)
     RCUTILS_LOG_DEBUG("vo solver costs: %f ms", t);
     RCUTILS_LOG_DEBUG("average of time %f ms", sum_of_time / sum_of_calculation);
 
-    sum_of_path += (estimator.Ps[WINDOW_SIZE] - last_path).norm();
+    // 总里程累加:首帧只记录位置(不计入原点偏移);
+    // 帧间位移超阈值视为 VIO 重置引起的跳变,不累加(10Hz 下 10m 即 100m/s,实际不可能)
+    static bool first_path = true;
+    if (first_path)
+    {
+        first_path = false;
+    }
+    else if ((estimator.Ps[WINDOW_SIZE] - last_path).norm() < 10.0)
+    {
+        sum_of_path += (estimator.Ps[WINDOW_SIZE] - last_path).norm();
+    }
     last_path = estimator.Ps[WINDOW_SIZE];
     RCUTILS_LOG_DEBUG("sum of path %f", sum_of_path);
     if (ESTIMATE_TD)
@@ -142,6 +155,13 @@ void pubOdometry(const Estimator &estimator, const std_msgs::msg::Header &header
         path.header.frame_id = "world";
         path.poses.push_back(pose_stamped);
         pub_path->publish(path);
+
+        // 总里程由 printStatistics 在本帧已累加完成(同线程先于本函数调用)
+        geometry_msgs::msg::PointStamped total_mileage;
+        total_mileage.header = header;
+        total_mileage.header.frame_id = "world";
+        total_mileage.point.x = sum_of_path;
+        pub_total_mileage->publish(total_mileage);
 
         Vector3d correct_t;
         Vector3d correct_v;
@@ -319,6 +339,7 @@ void pubTF(const Estimator &estimator, const std_msgs::msg::Header &header)
     correct_t = estimator.Ps[WINDOW_SIZE];
     correct_q = estimator.Rs[WINDOW_SIZE];
 
+    transform.header.stamp = header.stamp;
     transform.header.frame_id = "world";
     transform.child_frame_id = "body";
 

@@ -536,6 +536,33 @@ int main(int argc, char **argv)
 
     LOOP_CLOSURE = fsSettings["loop_closure"];
     std::string IMAGE_TOPIC;
+    // 图像输入模式:"raw" | "compressed"(与 feature_tracker 一致,非法/缺省按 raw 处理)
+    std::string IMAGE_TYPE = "raw";
+    if (!fsSettings["image_type"].empty())
+        fsSettings["image_type"] >> IMAGE_TYPE;
+    if (IMAGE_TYPE != "raw" && IMAGE_TYPE != "compressed")
+    {
+        std::cerr << "unknown image_type: " << IMAGE_TYPE << ", fall back to raw" << std::endl;
+        IMAGE_TYPE = "raw";
+    }
+    // 图像订阅 QoS(yaml 的 image_sub_qos,缺省 reliable + KeepLast(2000))
+    int image_qos_depth = 2000;
+    std::string image_qos_reliability = "reliable";
+    {
+        cv::FileNode node = fsSettings["image_sub_qos"];
+        if (!node.empty())
+        {
+            if (!node["depth"].empty())
+                image_qos_depth = (int)node["depth"];
+            if (!node["reliability"].empty())
+                node["reliability"] >> image_qos_reliability;
+        }
+    }
+    rclcpp::QoS IMAGE_SUB_QOS{rclcpp::KeepLast(image_qos_depth)};
+    if (image_qos_reliability == "best_effort")
+        IMAGE_SUB_QOS.best_effort();
+    else
+        IMAGE_SUB_QOS.reliable();
     int LOAD_PREVIOUS_POSE_GRAPH;
     if (LOOP_CLOSURE)
     {
@@ -590,26 +617,29 @@ int main(int argc, char **argv)
 
     auto sub_imu_forward = n->create_subscription<nav_msgs::msg::Odometry>("/vins_estimator/imu_propagate", rclcpp::QoS(rclcpp::KeepLast(2000)), imu_forward_callback);
     auto sub_vio = n->create_subscription<nav_msgs::msg::Odometry>("/vins_estimator/odometry", rclcpp::QoS(rclcpp::KeepLast(2000)), vio_callback);
-    // 按话题名自动组合 raw 与 compressed 订阅(与 feature_tracker 相同策略):
-    //   - image_topic 以 "/compressed" 结尾:该话题订阅 CompressedImage,
-    //     并订阅去掉后缀的 base 话题上的 raw Image
-    //   - 否则:订阅 image_topic 上的 raw Image 及 image_topic + "/compressed" 上的压缩流
-    // 首条到达的消息锁定实际使用的格式(见 acceptImageFormat)
-    std::string raw_topic = IMAGE_TOPIC;
-    std::string compressed_topic = IMAGE_TOPIC;
+    // 按 image_type 只订阅一种图像话题(与 feature_tracker 相同策略):
+    //   - "compressed":订阅 base + "/compressed" 上的 CompressedImage
+    //   - "raw":订阅 base 话题上的 sensor_msgs/msg/Image
+    // image_topic 若已带 "/compressed" 后缀则先剥离得到 base 话题;
+    // 订阅 QoS 由 yaml 的 image_sub_qos 配置
+    std::string base_topic = IMAGE_TOPIC;
     const std::string compressed_suffix = "/compressed";
-    if (raw_topic.size() > compressed_suffix.size() &&
-        raw_topic.compare(raw_topic.size() - compressed_suffix.size(), compressed_suffix.size(), compressed_suffix) == 0)
+    if (base_topic.size() > compressed_suffix.size() &&
+        base_topic.compare(base_topic.size() - compressed_suffix.size(), compressed_suffix.size(), compressed_suffix) == 0)
     {
-        compressed_topic = raw_topic;
-        raw_topic = raw_topic.substr(0, raw_topic.size() - compressed_suffix.size());
+        base_topic = base_topic.substr(0, base_topic.size() - compressed_suffix.size());
+    }
+    rclcpp::SubscriptionBase::SharedPtr sub_image;
+    if (IMAGE_TYPE == "compressed")
+    {
+        std::cout << "subscribe compressed image: " << base_topic + compressed_suffix << std::endl;
+        sub_image = n->create_subscription<sensor_msgs::msg::CompressedImage>(base_topic + compressed_suffix, IMAGE_SUB_QOS, compressed_image_callback);
     }
     else
     {
-        compressed_topic = raw_topic + compressed_suffix;
+        std::cout << "subscribe raw image: " << base_topic << std::endl;
+        sub_image = n->create_subscription<sensor_msgs::msg::Image>(base_topic, IMAGE_SUB_QOS, image_callback);
     }
-    auto sub_image = n->create_subscription<sensor_msgs::msg::Image>(raw_topic, rclcpp::QoS(rclcpp::KeepLast(2000)), image_callback);
-    auto sub_image_compressed = n->create_subscription<sensor_msgs::msg::CompressedImage>(compressed_topic, rclcpp::QoS(rclcpp::KeepLast(2000)), compressed_image_callback);
     auto sub_pose = n->create_subscription<nav_msgs::msg::Odometry>("/vins_estimator/keyframe_pose", rclcpp::QoS(rclcpp::KeepLast(2000)), pose_callback);
     auto sub_extrinsic = n->create_subscription<nav_msgs::msg::Odometry>("/vins_estimator/extrinsic", rclcpp::QoS(rclcpp::KeepLast(2000)), extrinsic_callback);
     auto sub_point = n->create_subscription<sensor_msgs::msg::PointCloud>("/vins_estimator/keyframe_point", rclcpp::QoS(rclcpp::KeepLast(2000)), point_callback);
