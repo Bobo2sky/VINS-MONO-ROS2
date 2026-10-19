@@ -10,6 +10,9 @@ std::vector<std::string> CAM_NAMES;
 std::string FISHEYE_MASK;
 int MAX_CNT;
 int MIN_DIST;
+// 图像降采样倍数(仅 PINHOLE 模型):解码后 resize 到 1/DOWNSAMPLE 分辨率再跟踪,
+// 内参/min_dist/ROW/COL 同比缩放,归一化坐标畸变与分辨率无关
+int DOWNSAMPLE = 1;
 int WINDOW_SIZE;
 int FREQ;
 double F_THRESHOLD;
@@ -90,6 +93,26 @@ void readParameters(rclcpp::Node::SharedPtr &n)
     MIN_DIST = fsSettings["min_dist"];
     ROW = fsSettings["image_height"];
     COL = fsSettings["image_width"];
+    // 降采样跟踪:非 PINHOLE 模型不支持时按 1 处理(内参缩放仅实现 PINHOLE)
+    DOWNSAMPLE = 1;
+    if (!fsSettings["downsample"].empty())
+        DOWNSAMPLE = (int)fsSettings["downsample"];
+    std::string model_type;
+    if (!fsSettings["model_type"].empty())
+        fsSettings["model_type"] >> model_type;
+    if (DOWNSAMPLE > 1 && model_type != "PINHOLE")
+    {
+        RCUTILS_LOG_WARN("downsample only supports PINHOLE (model_type: %s), keep full resolution", model_type.c_str());
+        DOWNSAMPLE = 1;
+    }
+    if (DOWNSAMPLE < 1)
+    {
+        RCUTILS_LOG_WARN("invalid downsample: %d, fall back to 1", DOWNSAMPLE);
+        DOWNSAMPLE = 1;
+    }
+    ROW /= DOWNSAMPLE;
+    COL /= DOWNSAMPLE;
+    MIN_DIST /= DOWNSAMPLE;
     FREQ = fsSettings["freq"];
     F_THRESHOLD = fsSettings["F_threshold"];
     SHOW_TRACK = fsSettings["show_track"];

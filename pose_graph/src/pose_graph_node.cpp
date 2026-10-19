@@ -18,6 +18,7 @@
 #include <eigen3/Eigen/Dense>
 #include <opencv2/opencv.hpp>
 #include <opencv2/core/eigen.hpp>
+#include <memory>
 #include "keyframe.h"
 #include "utility/tic_toc.h"
 #include "pose_graph.h"
@@ -68,6 +69,8 @@ int VISUALIZATION_SHIFT_X;
 int VISUALIZATION_SHIFT_Y;
 int ROW;
 int COL;
+// 图像降采样倍数(与 feature_tracker 一致;关键帧图像 resize 后再建 KeyFrame)
+int DOWNSAMPLE = 1;
 int DEBUG_IMAGE;
 int VISUALIZE_IMU_FORWARD;
 int LOOP_CLOSURE;
@@ -138,6 +141,16 @@ void image_callback(const sensor_msgs::msg::Image::ConstPtr image_msg)
         return;
     if (!acceptImageFormat(FORMAT_RAW))
         return;
+    // 降采样:与 feature_tracker 一致,关键帧图像 resize 后再建 KeyFrame
+    if (DOWNSAMPLE > 1)
+    {
+        auto ptr = cv_bridge::toCvCopy(image_msg, sensor_msgs::image_encodings::MONO8);
+        cv::Mat scaled;
+        cv::resize(ptr->image, scaled, cv::Size(COL, ROW), 0, 0, cv::INTER_AREA);
+        ptr->image = scaled;
+        push_image(ptr->toImageMsg());
+        return;
+    }
     push_image(image_msg);
 }
 
@@ -156,6 +169,13 @@ void compressed_image_callback(const sensor_msgs::msg::CompressedImage::SharedPt
     {
         RCUTILS_LOG_ERROR("compressed image decode failed (format: %s)", image_msg->format.c_str());
         return;
+    }
+    // 降采样:与 feature_tracker 一致
+    if (DOWNSAMPLE > 1)
+    {
+        cv::Mat scaled;
+        cv::resize(gray, scaled, cv::Size(COL, ROW), 0, 0, cv::INTER_AREA);
+        gray = scaled;
     }
     // 包装为 mono8 Image 消息,复用后续关键帧处理主体
     cv_bridge::CvImage cv_img(image_msg->header, sensor_msgs::image_encodings::MONO8, gray);
@@ -568,6 +588,21 @@ int main(int argc, char **argv)
     {
         ROW = fsSettings["image_height"];
         COL = fsSettings["image_width"];
+        // 降采样倍数(仅 PINHOLE;关键帧图像 resize 后再建 KeyFrame)
+        if (!fsSettings["downsample"].empty())
+            DOWNSAMPLE = (int)fsSettings["downsample"];
+        std::string model_type;
+        if (!fsSettings["model_type"].empty())
+            fsSettings["model_type"] >> model_type;
+        if (DOWNSAMPLE > 1 && model_type != "PINHOLE")
+        {
+            std::cerr << "downsample only supports PINHOLE (model_type: " << model_type << "), keep full resolution" << std::endl;
+            DOWNSAMPLE = 1;
+        }
+        if (DOWNSAMPLE < 1)
+            DOWNSAMPLE = 1;
+        ROW /= DOWNSAMPLE;
+        COL /= DOWNSAMPLE;
         // std::string pkg_path = ament_index_cpp::get_package_share_directory("pose_graph");
         std::string support_path = fsSettings["support_path"];
         n->declare_parameter<std::string>("support_file", "");
@@ -579,6 +614,20 @@ int main(int argc, char **argv)
         BRIEF_PATTERN_FILE = support_path + "/../support_files/brief_pattern.yml";
         cout << "BRIEF_PATTERN_FILE" << BRIEF_PATTERN_FILE << endl;
         m_camera = camodocal::CameraFactory::instance()->generateCameraFromYamlFile(config_file.c_str());
+        // 内参同比缩放,与 feature_tracker 降采样跟踪保持一致(重定位坐标转换用)
+        if (DOWNSAMPLE > 1)
+        {
+            auto pinhole = boost::dynamic_pointer_cast<camodocal::PinholeCamera>(m_camera);
+            camodocal::PinholeCamera::Parameters params = pinhole->getParameters();
+            params.fx() /= DOWNSAMPLE;
+            params.fy() /= DOWNSAMPLE;
+            params.cx() /= DOWNSAMPLE;
+            params.cy() /= DOWNSAMPLE;
+            params.imageWidth() /= DOWNSAMPLE;
+            params.imageHeight() /= DOWNSAMPLE;
+            m_camera.reset(new camodocal::PinholeCamera(params));
+            std::cout << "camera intrinsics scaled by 1/" << DOWNSAMPLE << " for downsampled keyframes" << std::endl;
+        }
 
         fsSettings["image_topic"] >> IMAGE_TOPIC;
         fsSettings["pose_graph_save_path"] >> POSE_GRAPH_SAVE_PATH;

@@ -17,6 +17,8 @@ int NUM_ITERATIONS;
 int ESTIMATE_EXTRINSIC;
 int ESTIMATE_TD;
 int ROLLING_SHUTTER;
+// 是否发布 imu_propagate 高频前向传播里程计(yaml visualize_imu_forward)
+int VISUALIZE_IMU_FORWARD = 0;
 std::string EX_CALIB_RESULT_PATH;
 std::string VINS_RESULT_PATH;
 std::string IMU_TOPIC;
@@ -158,6 +160,11 @@ void readParameters(rclcpp::Node::SharedPtr n)
     {
         TR = 0;
     }
-    
+
+    // 是否发布 imu_propagate 高频前向传播里程计(默认关,省 100Hz 发布开销)
+    VISUALIZE_IMU_FORWARD = 0;
+    if (!fsSettings["visualize_imu_forward"].empty())
+        VISUALIZE_IMU_FORWARD = (int)fsSettings["visualize_imu_forward"];
+
     fsSettings.release();
 }

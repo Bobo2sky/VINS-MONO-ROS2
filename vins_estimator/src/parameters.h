@@ -38,6 +38,8 @@ extern double TD;
 extern double TR;
 extern int ESTIMATE_TD;
 extern int ROLLING_SHUTTER;
+// 是否发布 imu_propagate 高频前向传播里程计(yaml visualize_imu_forward)
+extern int VISUALIZE_IMU_FORWARD;
 extern double ROW, COL;
 
 void readParameters(rclcpp::Node::SharedPtr n);

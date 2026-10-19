@@ -55,18 +55,21 @@ bool first_image_flag = true;
 double last_image_time = 0;
 bool init_pub = 0;
 
-void process_image(const sensor_msgs::msg::Image::SharedPtr img_msg)
+// 直接接收 cv::Mat(raw 路径经 cv_bridge 转换、compressed 路径 imdecode 后调用),
+// 避免压缩路径 8MP 全图的双重拷贝(toImageMsg + toCvCopy)
+void process_image(const cv::Mat &raw_img, const std_msgs::msg::Header &header)
 {
+    double t = header.stamp.sec + header.stamp.nanosec * (1e-9);
     if (first_image_flag)
     {
         first_image_flag = false;
-        first_image_time = img_msg->header.stamp.sec + img_msg->header.stamp.nanosec * (1e-9);
-        last_image_time = img_msg->header.stamp.sec + img_msg->header.stamp.nanosec * (1e-9);
+        first_image_time = t;
+        last_image_time = t;
         return;
     }
 
     // detect unstable camera stream
-    if (img_msg->header.stamp.sec + img_msg->header.stamp.nanosec * (1e-9) - last_image_time > 1.0 || img_msg->header.stamp.sec + img_msg->header.stamp.nanosec * (1e-9) < last_image_time)
+    if (t - last_image_time > 1.0 || t < last_image_time)
     {
         RCUTILS_LOG_WARN("image discontinue! reset the feature tracker!");
         first_image_flag = true;
@@ -78,38 +81,31 @@ void process_image(const sensor_msgs::msg::Image::SharedPtr img_msg)
         return;
     }
 
-    last_image_time = img_msg->header.stamp.sec + img_msg->header.stamp.nanosec * (1e-9);
+    last_image_time = t;
     // frequency control
-    if (round(1.0 * pub_count / (img_msg->header.stamp.sec + img_msg->header.stamp.nanosec * (1e-9) - first_image_time)) <= FREQ)
+    if (round(1.0 * pub_count / (t - first_image_time)) <= FREQ)
     {
         PUB_THIS_FRAME = true;
         // reset the frequency control
-        if (abs(1.0 * pub_count / (img_msg->header.stamp.sec + img_msg->header.stamp.nanosec * (1e-9) - first_image_time) - FREQ) < 0.01 * FREQ)
+        if (abs(1.0 * pub_count / (t - first_image_time) - FREQ) < 0.01 * FREQ)
         {
-            first_image_time = img_msg->header.stamp.sec + img_msg->header.stamp.nanosec * (1e-9);
+            first_image_time = t;
             pub_count = 0;
         }
     }
     else
         PUB_THIS_FRAME = false;
 
-    cv_bridge::CvImageConstPtr ptr;
-    if (img_msg->encoding == "8UC1")
+    // 降采样跟踪:解码/转换后 resize 到 (COL, ROW) 再进入光流/特征检测
+    cv::Mat track_img = raw_img;
+    if (DOWNSAMPLE > 1)
     {
-        sensor_msgs::msg::Image img;
-        img.header = img_msg->header;
-        img.height = img_msg->height;
-        img.width = img_msg->width;
-        img.is_bigendian = img_msg->is_bigendian;
-        img.step = img_msg->step;
-        img.data = img_msg->data;
-        img.encoding = "mono8";
-        ptr = cv_bridge::toCvCopy(img, sensor_msgs::image_encodings::MONO8);
+        cv::Mat scaled;
+        cv::resize(track_img, scaled, cv::Size(COL, ROW), 0, 0, cv::INTER_AREA);
+        track_img = scaled;
     }
-    else
-        ptr = cv_bridge::toCvCopy(img_msg, sensor_msgs::image_encodings::MONO8);
 
-    cv::Mat show_img = ptr->image;
+    cv::Mat show_img = track_img;
     // cv::imshow("img", show_img);
     // cv::waitKey(0);
     TicToc t_r;
@@ -117,16 +113,16 @@ void process_image(const sensor_msgs::msg::Image::SharedPtr img_msg)
     {
         RCUTILS_LOG_DEBUG("processing camera %d", i);
         if (i != 1 || !STEREO_TRACK)
-            trackerData[i].readImage(ptr->image.rowRange(ROW * i, ROW * (i + 1)), img_msg->header.stamp.sec + img_msg->header.stamp.nanosec * (1e-9));
+            trackerData[i].readImage(track_img.rowRange(ROW * i, ROW * (i + 1)), t);
         else
         {
             if (EQUALIZE)
             {
                 cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE();
-                clahe->apply(ptr->image.rowRange(ROW * i, ROW * (i + 1)), trackerData[i].cur_img);
+                clahe->apply(track_img.rowRange(ROW * i, ROW * (i + 1)), trackerData[i].cur_img);
             }
             else
-                trackerData[i].cur_img = ptr->image.rowRange(ROW * i, ROW * (i + 1));
+                trackerData[i].cur_img = track_img.rowRange(ROW * i, ROW * (i + 1));
         }
 
 #if SHOW_UNDISTORTION
@@ -154,7 +150,7 @@ void process_image(const sensor_msgs::msg::Image::SharedPtr img_msg)
         sensor_msgs::msg::ChannelFloat32 velocity_x_of_point;
         sensor_msgs::msg::ChannelFloat32 velocity_y_of_point;
 
-        feature_points->header = img_msg->header;
+        feature_points->header = header;
         feature_points->header.frame_id = "world";
 
         vector<set<int>> hash_ids(NUM_OF_CAM);
@@ -202,48 +198,50 @@ void process_image(const sensor_msgs::msg::Image::SharedPtr img_msg)
 
         if (SHOW_TRACK)
         {
-            ptr = cv_bridge::cvtColor(ptr, sensor_msgs::image_encodings::BGR8);
-            // cv::Mat stereo_img(ROW * NUM_OF_CAM, COL, CV_8UC3);
-            cv::Mat stereo_img = ptr->image;
+            // 单次灰度→BGR 转换,画跟踪点后缩到 1/2 分辨率发布
+            // (原实现做两次全图 GRAY2RGB 且发布全尺寸,8MP 下每帧 ~25MB 序列化)
+            cv::Mat stereo_img;
+            cv::cvtColor(show_img, stereo_img, CV_GRAY2BGR);
 
             for (int i = 0; i < NUM_OF_CAM; i++)
             {
                 cv::Mat tmp_img = stereo_img.rowRange(i * ROW, (i + 1) * ROW);
-                cv::cvtColor(show_img, tmp_img, CV_GRAY2RGB);
 
                 for (unsigned int j = 0; j < trackerData[i].cur_pts.size(); j++)
                 {
                     double len = std::min(1.0, 1.0 * trackerData[i].track_cnt[j] / WINDOW_SIZE);
                     cv::circle(tmp_img, trackerData[i].cur_pts[j], 2, cv::Scalar(255 * (1 - len), 0, 255 * len), 2);
-                    // draw speed line
-                    /*
-                    Vector2d tmp_cur_un_pts (trackerData[i].cur_un_pts[j].x, trackerData[i].cur_un_pts[j].y);
-                    Vector2d tmp_pts_velocity (trackerData[i].pts_velocity[j].x, trackerData[i].pts_velocity[j].y);
-                    Vector3d tmp_prev_un_pts;
-                    tmp_prev_un_pts.head(2) = tmp_cur_un_pts - 0.10 * tmp_pts_velocity;
-                    tmp_prev_un_pts.z() = 1;
-                    Vector2d tmp_prev_uv;
-                    trackerData[i].m_camera->spaceToPlane(tmp_prev_un_pts, tmp_prev_uv);
-                    cv::line(tmp_img, trackerData[i].cur_pts[j], cv::Point2f(tmp_prev_uv.x(), tmp_prev_uv.y()), cv::Scalar(255 , 0, 0), 1 , 8, 0);
-                    */
-                    // char name[10];
-                    // sprintf(name, "%d", trackerData[i].ids[j]);
-                    // cv::putText(tmp_img, name, trackerData[i].cur_pts[j], cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0));
                 }
             }
-            // cv::imshow("vis", stereo_img);
-            // cv::waitKey(5);
-            pub_match->publish(*(ptr->toImageMsg()));
+            cv::Mat small_img;
+            cv::resize(stereo_img, small_img, cv::Size(COL / 2, ROW / 2), 0, 0, cv::INTER_AREA);
+            cv_bridge::CvImage out_img(header, sensor_msgs::image_encodings::BGR8, small_img);
+            pub_match->publish(*(out_img.toImageMsg()));
         }
     }
-    // RCUTILS_LOG_INFO("whole feature tracker processing costs: %fms", t_r.toc());
+    RCUTILS_LOG_DEBUG("whole feature tracker processing costs: %fms", t_r.toc());
 }
 
 void img_callback(const sensor_msgs::msg::Image::SharedPtr img_msg)
 {
     if (!acceptImageFormat(FORMAT_RAW))
         return;
-    process_image(img_msg);
+    cv_bridge::CvImageConstPtr ptr;
+    if (img_msg->encoding == "8UC1")
+    {
+        sensor_msgs::msg::Image img;
+        img.header = img_msg->header;
+        img.height = img_msg->height;
+        img.width = img_msg->width;
+        img.is_bigendian = img_msg->is_bigendian;
+        img.step = img_msg->step;
+        img.data = img_msg->data;
+        img.encoding = "mono8";
+        ptr = cv_bridge::toCvCopy(img, sensor_msgs::image_encodings::MONO8);
+    }
+    else
+        ptr = cv_bridge::toCvCopy(img_msg, sensor_msgs::image_encodings::MONO8);
+    process_image(ptr->image, img_msg->header);
 }
 
 // 兼容 sensor_msgs/msg/CompressedImage。
@@ -260,9 +258,7 @@ void compressed_img_callback(const sensor_msgs::msg::CompressedImage::SharedPtr 
         RCUTILS_LOG_ERROR("compressed image decode failed (format: %s)", img_msg->format.c_str());
         return;
     }
-    // 包装为 mono8 Image 消息,复用后续特征跟踪处理主体
-    cv_bridge::CvImage cv_img(img_msg->header, sensor_msgs::image_encodings::MONO8, gray);
-    process_image(cv_img.toImageMsg());
+    process_image(gray, img_msg->header);
 }
 
 int main(int argc, char **argv)

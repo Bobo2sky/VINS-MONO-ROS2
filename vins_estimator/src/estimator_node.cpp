@@ -155,7 +155,7 @@ void imu_callback(const sensor_msgs::msg::Imu::SharedPtr imu_msg)
         predict(imu_msg);
         std_msgs::msg::Header header = imu_msg->header;
         header.frame_id = "world";
-        if (estimator.solver_flag == Estimator::SolverFlag::NON_LINEAR)
+        if (estimator.solver_flag == Estimator::SolverFlag::NON_LINEAR && VISUALIZE_IMU_FORWARD)
             pubLatestOdometry(tmp_P, tmp_Q, tmp_V, header);
     }
 }

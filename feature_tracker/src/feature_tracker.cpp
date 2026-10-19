@@ -1,4 +1,5 @@
 #include "feature_tracker.h"
+#include <memory>
 
 int FeatureTracker::n_id = 0;
 
@@ -218,6 +219,21 @@ void FeatureTracker::readIntrinsicParameter(const string &calib_file)
 {
     RCUTILS_LOG_INFO("reading paramerter of camera %s", calib_file.c_str());
     m_camera = CameraFactory::instance()->generateCameraFromYamlFile(calib_file);
+    // 降采样跟踪:fx/fy/cx/cy 同比缩放(畸变系数作用于归一化坐标,与分辨率无关),
+    // 缩放后像素坐标经 liftProjective 得到与全分辨率相同的归一化坐标
+    if (DOWNSAMPLE > 1)
+    {
+        auto pinhole = boost::dynamic_pointer_cast<PinholeCamera>(m_camera);
+        PinholeCamera::Parameters params = pinhole->getParameters();
+        params.fx() /= DOWNSAMPLE;
+        params.fy() /= DOWNSAMPLE;
+        params.cx() /= DOWNSAMPLE;
+        params.cy() /= DOWNSAMPLE;
+        params.imageWidth() /= DOWNSAMPLE;
+        params.imageHeight() /= DOWNSAMPLE;
+        m_camera.reset(new PinholeCamera(params));
+        RCUTILS_LOG_INFO("camera intrinsics scaled by 1/%d for downsampled tracking", DOWNSAMPLE);
+    }
 }
 
 void FeatureTracker::showUndistortion(const string &name)

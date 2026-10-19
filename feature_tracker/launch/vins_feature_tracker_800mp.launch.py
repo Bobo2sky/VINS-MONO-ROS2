@@ -32,21 +32,10 @@ def generate_launch_description():
         }]
     )
 
-    rviz_config_path = PathJoinSubstitution([
-        config_pkg_path,
-        'config/vins_euroc_rviz.rviz'
-    ])
-
-    rviz_node = Node(
-        package='rviz2',
-        executable='rviz2',
-        name='rviz2',
-        arguments=['-d', rviz_config_path],
-        output='screen'
-    )
+    # rviz 已移出 launch(8MP 场景渲染耗 CPU);需要可视化时手动启动:
+    # ros2 run rviz2 rviz2 -d <config_pkg_share>/config/vins_euroc_rviz.rviz
 
     return LaunchDescription([
         LogInfo(msg=['[feature tracker launch] config path: ', config_path]),
-        feature_tracker_node,
-        rviz_node
+        feature_tracker_node
     ])

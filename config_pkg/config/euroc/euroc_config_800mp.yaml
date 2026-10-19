@@ -12,6 +12,8 @@ image_sub_qos:
 imu_sub_qos:
    reliability: "best_effort"   # "reliable" | "best_effort"
    depth: 2000
+# 降采样跟踪(仅 PINHOLE):解码后 resize 到 1/downsample 分辨率再跟踪,内参同比缩放
+downsample: 2
 
 output_path: "/workspace/vins_vio/output/"
 

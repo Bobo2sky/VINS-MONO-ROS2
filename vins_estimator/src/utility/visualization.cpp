@@ -151,10 +151,17 @@ void pubOdometry(const Estimator &estimator, const std_msgs::msg::Header &header
         pose_stamped.header = header;
         pose_stamped.header.frame_id = "world";
         pose_stamped.pose = odometry.pose.pose;
-        path.header = header;
-        path.header.frame_id = "world";
+        // path 消息随时间线性增长,全量重发按 1s 节流(10Hz 全量发布为 O(n²) 序列化)
+        static double last_path_pub_time = -1;
+        double now = header.stamp.sec + header.stamp.nanosec * 1e-9;
         path.poses.push_back(pose_stamped);
-        pub_path->publish(path);
+        if (now - last_path_pub_time >= 1.0)
+        {
+            last_path_pub_time = now;
+            path.header = header;
+            path.header.frame_id = "world";
+            pub_path->publish(path);
+        }
 
         // 总里程由 printStatistics 在本帧已累加完成(同线程先于本函数调用)
         geometry_msgs::msg::PointStamped total_mileage;
@@ -177,10 +184,16 @@ void pubOdometry(const Estimator &estimator, const std_msgs::msg::Header &header
         odometry.pose.pose.orientation.w = correct_q.w();
 
         pose_stamped.pose = odometry.pose.pose;
-        relo_path.header = header;
-        relo_path.header.frame_id = "world";
+        // 同 path:1s 节流全量重发
+        static double last_relo_path_pub_time = -1;
         relo_path.poses.push_back(pose_stamped);
-        pub_relo_path->publish(relo_path);
+        if (now - last_relo_path_pub_time >= 1.0)
+        {
+            last_relo_path_pub_time = now;
+            relo_path.header = header;
+            relo_path.header.frame_id = "world";
+            pub_relo_path->publish(relo_path);
+        }
 
         // write result to file
         ofstream foutC(VINS_RESULT_PATH, ios::app);
