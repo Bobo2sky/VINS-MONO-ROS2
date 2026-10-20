@@ -50,8 +50,13 @@ add_library(camera_model
     src/gpl/gpl.cc
     src/gpl/EigenQuaternionParameterization.cc)
 
-target_link_libraries(Calibration ${Boost_LIBRARIES} ${OpenCV_LIBS} ${CERES_LIBRARIES})
-target_link_libraries(camera_model ${Boost_LIBRARIES} ${OpenCV_LIBS} ${CERES_LIBRARIES})
+# 只链接实际用到的 OpenCV 模块；${OpenCV_LIBS} 会带入 Debian OpenCVConfig
+# 的全部模块（含 viz->VTK->GDAL 链路），J6 板端运行库闭包无法满足。
+set(VINS_OPENCV_LIBS
+  opencv_core opencv_imgproc opencv_calib3d opencv_features2d
+  opencv_video opencv_imgcodecs opencv_highgui)
+target_link_libraries(Calibration ${Boost_LIBRARIES} ${VINS_OPENCV_LIBS} ${CERES_LIBRARIES})
+target_link_libraries(camera_model ${Boost_LIBRARIES} ${VINS_OPENCV_LIBS} ${CERES_LIBRARIES})
 
 # Install
 install(TARGETS

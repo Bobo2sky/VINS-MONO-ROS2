@@ -48,7 +48,12 @@ add_executable(pose_graph
 
 ament_target_dependencies(pose_graph rclcpp rcpputils std_msgs sensor_msgs visualization_msgs geometry_msgs nav_msgs tf2 tf2_ros cv_bridge camera_model image_transport ament_index_cpp)
 
-target_link_libraries(pose_graph ${OpenCV_LIBS} ${CERES_LIBRARIES}) 
+# 只链接实际用到的 OpenCV 模块；${OpenCV_LIBS} 会带入 Debian OpenCVConfig
+# 的全部模块（含 viz->VTK->GDAL 链路），J6 板端运行库闭包无法满足。
+target_link_libraries(pose_graph
+  opencv_core opencv_imgproc opencv_calib3d opencv_features2d
+  opencv_video opencv_imgcodecs opencv_highgui
+  ${CERES_LIBRARIES})
 
 # Install nodes
 install(

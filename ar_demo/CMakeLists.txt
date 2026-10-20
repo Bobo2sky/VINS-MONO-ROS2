@@ -31,7 +31,11 @@ add_executable(ar_demo_node src/ar_demo_node.cpp)
 
 ament_target_dependencies(ar_demo_node rclcpp rcpputils std_msgs sensor_msgs geometry_msgs visualization_msgs nav_msgs cv_bridge camera_model image_transport)
 
-target_link_libraries(ar_demo_node ${OpenCV_LIBS}) 
+# 只链接实际用到的 OpenCV 模块；${OpenCV_LIBS} 会带入 Debian OpenCVConfig
+# 的全部模块（含 viz->VTK->GDAL 链路），J6 板端运行库闭包无法满足。
+target_link_libraries(ar_demo_node
+  opencv_core opencv_imgproc opencv_calib3d opencv_features2d
+  opencv_video opencv_imgcodecs opencv_highgui)
 
 # Install nodes
 install(

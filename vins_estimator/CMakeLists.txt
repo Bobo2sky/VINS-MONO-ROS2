@@ -53,7 +53,12 @@ add_executable(vins_estimator
 
 ament_target_dependencies(vins_estimator rclcpp rcpputils std_msgs sensor_msgs visualization_msgs geometry_msgs nav_msgs tf2 tf2_ros cv_bridge camera_model image_transport)
 
-target_link_libraries(vins_estimator ${OpenCV_LIBS} ${CERES_LIBRARIES}) 
+# 只链接实际用到的 OpenCV 模块；${OpenCV_LIBS} 会带入 Debian OpenCVConfig
+# 的全部模块（含 viz->VTK->GDAL 链路），J6 板端运行库闭包无法满足。
+target_link_libraries(vins_estimator
+  opencv_core opencv_imgproc opencv_calib3d opencv_features2d
+  opencv_video opencv_imgcodecs opencv_highgui
+  ${CERES_LIBRARIES})
 
 # Install nodes
 install(

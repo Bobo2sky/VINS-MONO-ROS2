@@ -33,7 +33,11 @@ add_executable(feature_tracker
     )
 
 ament_target_dependencies(feature_tracker rclcpp rcpputils std_msgs sensor_msgs geometry_msgs cv_bridge camera_model image_transport)
-target_link_libraries(feature_tracker ${OpenCV_LIBS})
+# 只链接实际用到的 OpenCV 模块；${OpenCV_LIBS} 会带入 Debian OpenCVConfig
+# 的全部模块（含 viz->VTK->GDAL 链路），J6 板端运行库闭包无法满足。
+target_link_libraries(feature_tracker
+  opencv_core opencv_imgproc opencv_calib3d opencv_features2d
+  opencv_video opencv_imgcodecs opencv_highgui)
 
 # Install nodes
 install(
