@@ -24,9 +24,9 @@ colcon build
 | `vins_estimator` | 核心 VIO:IMU 预积分、滑窗优化(Ceres)、初始化(视觉-惯性对齐)、边缘化、发布里程计 |
 | `pose_graph` | 回环检测(DBoW2 + BRIEF 描述子)、重定位、全局位姿图 |
 | `camera_model` | camodocal 相机模型库(PINHOLE / MEI / KANNALA_BRANDT / SCARAMUZZA),无节点 |
-| `ar_demo` | AR 演示节点 |
-| `benchmark_publisher` | 发布 EuRoC 真值轨迹 |
 | `config_pkg` | 所有配置 yaml、rviz 配置、回环字典(`support_files/brief_k10L6.bin`)。**ROS2 移植说明**:`get_package_share_directory` 只解析 `install/` 下的包,故将配置从 ROS1 的 vins_estimator 中拆出为独立包 |
+
+注:`ar_demo` / `benchmark_publisher` 演示包已在本分支移除(车端部署精简)。
 
 ## 数据流(核心链路)
 
@@ -83,22 +83,22 @@ IMU 话题 (/imu0)
 | `/feature_tracker/feature` | `sensor_msgs/msg/PointCloud` | 输入 | 特征点(见上表) |
 | `/feature_tracker/restart` | `std_msgs/msg/Bool` | 输入 | 重置信号 |
 | `/pose_graph/match_points` | `sensor_msgs/msg/PointCloud` | 输入 | 快速重定位约束(仅 `fast_relocalization: 1` 时有数据) |
-| `/vins_estimator/imu_propagate` | `nav_msgs/msg/Odometry` | 输出 | IMU 前向传播高频里程计:pose 为 world 系姿态/位置,twist 为体系速度 + 陀螺原始角速度 |
+| `/vins_estimator/imu_propagate` | `nav_msgs/msg/Odometry` | 输出 | IMU 前向传播高频里程计:pose 为 odom 系姿态/位置,twist 为体系速度 + 陀螺原始角速度 |
 | `/vins_estimator/total_mileage` | `geometry_msgs/msg/PointStamped` | 输出 | VIO 总里程(米):`point.x` 存累计路径长度,stamp 为图像帧时间;首帧不计原点偏移,帧间跳变 >10m 不累加(重置保护) |
-| `/vins_estimator/odometry` | `nav_msgs/msg/Odometry` | 输出 | 滑窗优化后的 VIO 里程计(world 系,每图像帧一次) |
-| `/vins_estimator/path` | `nav_msgs/msg/Path` | 输出 | 滑窗位姿轨迹(world 系) |
+| `/vins_estimator/odometry` | `nav_msgs/msg/Odometry` | 输出 | 滑窗优化后的 VIO 里程计(odom 系,每图像帧一次) |
+| `/vins_estimator/path` | `nav_msgs/msg/Path` | 输出 | 滑窗位姿轨迹(odom 系) |
 | `/vins_estimator/relocalization_path` | `nav_msgs/msg/Path` | 输出 | 漂移校正后的重定位轨迹 |
-| `/vins_estimator/point_cloud` | `sensor_msgs/msg/PointCloud` | 输出 | 当前滑窗 3D 路标点(world 系) |
-| `/vins_estimator/history_cloud` | `sensor_msgs/msg/PointCloud` | 输出 | 边缘化保留的历史路标点(world 系) |
+| `/vins_estimator/point_cloud` | `sensor_msgs/msg/PointCloud` | 输出 | 当前滑窗 3D 路标点(odom 系) |
+| `/vins_estimator/history_cloud` | `sensor_msgs/msg/PointCloud` | 输出 | 边缘化保留的历史路标点(odom 系) |
 | `/vins_estimator/key_poses` | `visualization_msgs/msg/Marker` | 输出 | 滑窗关键位姿点集 |
-| `/vins_estimator/camera_pose` | `nav_msgs/msg/Odometry` | 输出 | 最新相机位姿(world 系) |
+| `/vins_estimator/camera_pose` | `nav_msgs/msg/Odometry` | 输出 | 最新相机位姿(odom 系) |
 | `/vins_estimator/camera_pose_visual` | `visualization_msgs/msg/MarkerArray` | 输出 | 相机位姿箭头可视化 |
-| `/vins_estimator/keyframe_pose` | `nav_msgs/msg/Odometry` | 输出 | 关键帧 IMU 位姿(world 系),供 pose_graph 建关键帧 |
-| `/vins_estimator/keyframe_point` | `sensor_msgs/msg/PointCloud` | 输出 | 关键帧对应 3D 路标(world 系) |
+| `/vins_estimator/keyframe_pose` | `nav_msgs/msg/Odometry` | 输出 | 关键帧 IMU 位姿(odom 系),供 pose_graph 建关键帧 |
+| `/vins_estimator/keyframe_point` | `sensor_msgs/msg/PointCloud` | 输出 | 关键帧对应 3D 路标(odom 系) |
 | `/vins_estimator/extrinsic` | `nav_msgs/msg/Odometry` | 输出 | 在线估计的相机-IMU 外参(pose 字段存 RIC/tic) |
 | `/vins_estimator/relo_relative_pose` | `nav_msgs/msg/Odometry` | 输出 | 重定位时滑窗首帧相对回环帧的位姿 |
 
-TF 广播:`world → body` 与 `world → camera`(均在 pubOdometry 同路径刷新,每图像帧一次,stamp 为图像帧时间)。
+TF 广播:`odom → base_link` 与 `base_link → camera`(均在 pubOdometry 同路径刷新,每图像帧一次,stamp 为图像帧时间)。所有输出消息 `frame_id` 为 `odom`,odometry 的 `child_frame_id` 为 `base_link`。
 
 ### pose_graph
 
@@ -106,25 +106,16 @@ TF 广播:`world → body` 与 `world → camera`(均在 pubOdometry 同路径�
 | --- | --- | --- | --- |
 | `<image_topic>`(按 `image_type` 单一格式) | `sensor_msgs/msg/Image` 或 `CompressedImage` | 输入 | 关键帧原始图像,订阅机制同 feature_tracker |
 | `/vins_estimator/imu_propagate` | `nav_msgs/msg/Odometry` | 输入 | fast relocalization 时更新旧关键帧初始位姿 |
-| `/vins_estimator/odometry` | `nav_msgs/msg/Odometry` | 输入 | VIO 里程计(持续更新关键帧 VIO 位姿 / 绘制 no_loop_path) |
+| `/vins_estimator/odometry` | `nav_msgs/msg/Odometry` | 输入 | VIO 里程计(持续更新关键帧 VIO 位姿) |
 | `/vins_estimator/keyframe_pose` | `nav_msgs/msg/Odometry` | 输入 | 触发建立关键帧 |
 | `/vins_estimator/keyframe_point` | `sensor_msgs/msg/PointCloud` | 输入 | 关键帧路标 |
 | `/vins_estimator/extrinsic` | `nav_msgs/msg/Odometry` | 输入 | 相机-IMU 外参(重定位坐标转换用) |
 | `/vins_estimator/relo_relative_pose` | `nav_msgs/msg/Odometry` | 输入 | 快速重定位相对位姿 |
 | `/pose_graph/match_image` | `sensor_msgs/msg/Image` | 输出 | **仅成功闭环时**发布的匹配可视化(需 `save_image: 1`);无回环则该话题无消息 |
 | `/pose_graph/match_points` | `sensor_msgs/msg/PointCloud` | 输出 | 重定位约束:points 为(旧关键帧归一化 x, y, 特征 ID);channel `t_q_index` 8 元素 = 旧帧 T(3) + Q(4) + 当前关键帧 index(1) |
-| `/pose_graph/pose_graph_path` | `nav_msgs/msg/Path` | 输出 | 闭环优化后全局轨迹 |
-| `/pose_graph/base_path` | `nav_msgs/msg/Path` | 输出 | 基准轨迹(第一序列) |
-| `/pose_graph/path_<i>` | `nav_msgs/msg/Path` | 输出 | 第 i 个序列的轨迹(`load_previous_pose_graph` 多序列) |
 | `/pose_graph/pose_graph` | `visualization_msgs/msg/MarkerArray` | 输出 | 位姿图可视化(顶点 + 回环边) |
-| `/pose_graph/no_loop_path` | `nav_msgs/msg/Path` | 输出 | 未闭环的 VIO 原始轨迹(漂移对比) |
 | `/pose_graph/camera_pose_visual` | `visualization_msgs/msg/MarkerArray` | 输出 | 关键帧相机位姿可视化 |
 | `/pose_graph/key_odometrys` | `visualization_msgs/msg/Marker` | 输出 | 关键帧里程计点集 |
-
-### 辅助节点
-
-- `benchmark_publisher`:输入 `/vins_estimator/odometry`(时间对齐用);输出 `benchmark_publisher/odometry` / `path`(EuRoC 真值)
-- `ar_demo`:输入 `/vins_estimator/camera_pose` + `/vins_estimator/point_cloud`(及图像话题);输出 `ar_demo/AR_object`(`visualization_msgs/msg/MarkerArray`)
 
 ## 图像/IMU 输入接口(image_type 选择格式 + QoS 配置)
 
@@ -169,14 +160,19 @@ TF 广播:`world → body` 与 `world → camera`(均在 pubOdometry 同路径�
 ## 运行(EuRoC 数据集)
 
 ```bash
+# 方式一(推荐):单 launch 启动 feature_tracker + vins_estimator + pose_graph
+ros2 launch vins_estimator vins_all.launch.py
+# 可通过 config_file 参数换配置(缺省 800mp 车端配置)
+ros2 launch vins_estimator vins_all.launch.py config_file:=<path_to_yaml>
+
+# 方式二:分终端启动
 # 终端 1:特征跟踪 + rviz
 ros2 launch feature_tracker vins_feature_tracker.launch.py
 # 终端 2:后端 + 回环
 ros2 launch vins_estimator euroc.launch.py
-# 终端 3:播放 ROS2 格式的 bag(ROS1 bag 需用 python rosbags 转换)
+
+# 播放 ROS2 格式的 bag(ROS1 bag 需用 python rosbags 转换)
 ros2 bag play <path_to_MH_01_easy>
-# 可选:真值
-ros2 launch benchmark_publisher benchmark_publisher.launch.py
 ```
 
 - launch 文件中的 `config_path` 指向 `config_pkg/config/<xx>/<xx>_config.yaml`,换自己的标定即新建 yaml 并改此路径(随后重新 colcon build)

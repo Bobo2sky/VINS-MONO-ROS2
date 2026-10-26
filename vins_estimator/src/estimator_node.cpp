@@ -154,7 +154,7 @@ void imu_callback(const sensor_msgs::msg::Imu::SharedPtr imu_msg)
         std::lock_guard<std::mutex> lg(m_state);
         predict(imu_msg);
         std_msgs::msg::Header header = imu_msg->header;
-        header.frame_id = "world";
+        header.frame_id = "odom";
         if (estimator.solver_flag == Estimator::SolverFlag::NON_LINEAR && VISUALIZE_IMU_FORWARD)
             pubLatestOdometry(tmp_P, tmp_Q, tmp_V, header);
     }
@@ -312,7 +312,7 @@ void process()
             double whole_t = t_s.toc();
             printStatistics(estimator, whole_t);
             std_msgs::msg::Header header = img_msg->header;
-            header.frame_id = "world";
+            header.frame_id = "odom";
 
             pubOdometry(estimator, header);
             pubKeyPoses(estimator, header);

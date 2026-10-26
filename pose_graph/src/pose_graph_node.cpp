@@ -83,8 +83,6 @@ rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_match_img;
 rclcpp::Publisher<sensor_msgs::msg::PointCloud>::SharedPtr pub_match_points;
 rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_camera_pose_visual;
 rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pub_key_odometrys;
-rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_vio_path;
-nav_msgs::msg::Path no_loop_path;
 
 std::string BRIEF_PATTERN_FILE;
 std::string POSE_GRAPH_SAVE_PATH;
@@ -304,7 +302,7 @@ void vio_callback(const nav_msgs::msg::Odometry::ConstPtr pose_msg)
 
     visualization_msgs::msg::Marker key_odometrys;
     key_odometrys.header = pose_msg->header;
-    key_odometrys.header.frame_id = "world";
+    key_odometrys.header.frame_id = "odom";
     key_odometrys.ns = "key_odometrys";
     key_odometrys.type = visualization_msgs::msg::Marker::SPHERE_LIST;
     key_odometrys.action = visualization_msgs::msg::Marker::ADD;
@@ -332,20 +330,6 @@ void vio_callback(const nav_msgs::msg::Odometry::ConstPtr pose_msg)
         odometry_buf.push(vio_t);
     }
     pub_key_odometrys->publish(key_odometrys);
-
-    if (!LOOP_CLOSURE)
-    {
-        geometry_msgs::msg::PoseStamped pose_stamped;
-        pose_stamped.header = pose_msg->header;
-        pose_stamped.header.frame_id = "world";
-        pose_stamped.pose.position.x = vio_t.x();
-        pose_stamped.pose.position.y = vio_t.y();
-        pose_stamped.pose.position.z = vio_t.z();
-        no_loop_path.header = pose_msg->header;
-        no_loop_path.header.frame_id = "world";
-        no_loop_path.poses.push_back(pose_stamped);
-        pub_vio_path->publish(no_loop_path);
-    }
 }
 
 void extrinsic_callback(const nav_msgs::msg::Odometry::ConstPtr pose_msg)
@@ -697,7 +681,6 @@ int main(int argc, char **argv)
     pub_match_img = n->create_publisher<sensor_msgs::msg::Image>("match_image", 1000);
     pub_camera_pose_visual = n->create_publisher<visualization_msgs::msg::MarkerArray>("camera_pose_visual", 1000);
     pub_key_odometrys = n->create_publisher<visualization_msgs::msg::Marker>("key_odometrys", 1000);
-    pub_vio_path = n->create_publisher<nav_msgs::msg::Path>("no_loop_path", 1000);
     pub_match_points = n->create_publisher<sensor_msgs::msg::PointCloud>("match_points", 100);
 
     std::thread measurement_process;

@@ -151,7 +151,7 @@ void process_image(const cv::Mat &raw_img, const std_msgs::msg::Header &header)
         sensor_msgs::msg::ChannelFloat32 velocity_y_of_point;
 
         feature_points->header = header;
-        feature_points->header.frame_id = "world";
+        feature_points->header.frame_id = "odom";
 
         vector<set<int>> hash_ids(NUM_OF_CAM);
         for (int i = 0; i < NUM_OF_CAM; i++)

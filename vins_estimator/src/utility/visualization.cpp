@@ -59,7 +59,7 @@ void pubLatestOdometry(const Eigen::Vector3d &P, const Eigen::Quaterniond &Q, co
 
     nav_msgs::msg::Odometry odometry;
     odometry.header = header;
-    odometry.header.frame_id = "world";
+    odometry.header.frame_id = "odom";
     odometry.pose.pose.position.x = P.x();
     odometry.pose.pose.position.y = P.y();
     odometry.pose.pose.position.z = P.z();
@@ -131,8 +131,8 @@ void pubOdometry(const Estimator &estimator, const std_msgs::msg::Header &header
     {
         nav_msgs::msg::Odometry odometry;
         odometry.header = header;
-        odometry.header.frame_id = "world";
-        odometry.child_frame_id = "world";
+        odometry.header.frame_id = "odom";
+        odometry.child_frame_id = "base_link";
         Quaterniond tmp_Q;
         tmp_Q = Quaterniond(estimator.Rs[WINDOW_SIZE]);
         odometry.pose.pose.position.x = estimator.Ps[WINDOW_SIZE].x();
@@ -149,7 +149,7 @@ void pubOdometry(const Estimator &estimator, const std_msgs::msg::Header &header
 
         geometry_msgs::msg::PoseStamped pose_stamped;
         pose_stamped.header = header;
-        pose_stamped.header.frame_id = "world";
+        pose_stamped.header.frame_id = "odom";
         pose_stamped.pose = odometry.pose.pose;
         // path 消息随时间线性增长,全量重发按 1s 节流(10Hz 全量发布为 O(n²) 序列化)
         static double last_path_pub_time = -1;
@@ -159,14 +159,14 @@ void pubOdometry(const Estimator &estimator, const std_msgs::msg::Header &header
         {
             last_path_pub_time = now;
             path.header = header;
-            path.header.frame_id = "world";
+            path.header.frame_id = "odom";
             pub_path->publish(path);
         }
 
         // 总里程由 printStatistics 在本帧已累加完成(同线程先于本函数调用)
         geometry_msgs::msg::PointStamped total_mileage;
         total_mileage.header = header;
-        total_mileage.header.frame_id = "world";
+        total_mileage.header.frame_id = "odom";
         total_mileage.point.x = sum_of_path;
         pub_total_mileage->publish(total_mileage);
 
@@ -191,7 +191,7 @@ void pubOdometry(const Estimator &estimator, const std_msgs::msg::Header &header
         {
             last_relo_path_pub_time = now;
             relo_path.header = header;
-            relo_path.header.frame_id = "world";
+            relo_path.header.frame_id = "odom";
             pub_relo_path->publish(relo_path);
         }
 
@@ -221,7 +221,7 @@ void pubKeyPoses(const Estimator &estimator, const std_msgs::msg::Header &header
         return;
     visualization_msgs::msg::Marker key_poses;
     key_poses.header = header;
-    key_poses.header.frame_id = "world";
+    key_poses.header.frame_id = "odom";
     key_poses.ns = "key_poses";
     key_poses.type = visualization_msgs::msg::Marker::SPHERE_LIST;
     key_poses.action = visualization_msgs::msg::Marker::ADD;
@@ -261,7 +261,7 @@ void pubCameraPose(const Estimator &estimator, const std_msgs::msg::Header &head
 
         nav_msgs::msg::Odometry odometry;
         odometry.header = header;
-        odometry.header.frame_id = "world";
+        odometry.header.frame_id = "odom";
         odometry.pose.pose.position.x = P.x();
         odometry.pose.pose.position.y = P.y();
         odometry.pose.pose.position.z = P.z();
@@ -353,8 +353,8 @@ void pubTF(const Estimator &estimator, const std_msgs::msg::Header &header)
     correct_q = estimator.Rs[WINDOW_SIZE];
 
     transform.header.stamp = header.stamp;
-    transform.header.frame_id = "world";
-    transform.child_frame_id = "body";
+    transform.header.frame_id = "odom";
+    transform.child_frame_id = "base_link";
 
     transform.transform.translation.x = correct_t(0);
     transform.transform.translation.y = correct_t(1);
@@ -373,7 +373,7 @@ void pubTF(const Estimator &estimator, const std_msgs::msg::Header &header)
 
     // camera frame
     transform_cam.header.stamp = header.stamp;
-    transform_cam.header.frame_id = "body";
+    transform_cam.header.frame_id = "base_link";
     transform_cam.child_frame_id = "camera";
 
 
@@ -395,7 +395,7 @@ void pubTF(const Estimator &estimator, const std_msgs::msg::Header &header)
 
     nav_msgs::msg::Odometry odometry;
     odometry.header = header;
-    odometry.header.frame_id = "world";
+    odometry.header.frame_id = "odom";
     odometry.pose.pose.position.x = estimator.tic[0].x();
     odometry.pose.pose.position.y = estimator.tic[0].y();
     odometry.pose.pose.position.z = estimator.tic[0].z();
@@ -420,7 +420,7 @@ void pubKeyframe(const Estimator &estimator)
 
         nav_msgs::msg::Odometry odometry;
         odometry.header = estimator.Headers[WINDOW_SIZE - 2];
-        odometry.header.frame_id = "world";
+        odometry.header.frame_id = "odom";
         odometry.pose.pose.position.x = P.x();
         odometry.pose.pose.position.y = P.y();
         odometry.pose.pose.position.z = P.z();
@@ -470,7 +470,7 @@ void pubRelocalization(const Estimator &estimator)
 {
     nav_msgs::msg::Odometry odometry;
     odometry.header.stamp = rclcpp::Time(estimator.relo_frame_stamp);
-    odometry.header.frame_id = "world";
+    odometry.header.frame_id = "odom";
     odometry.pose.pose.position.x = estimator.relo_relative_t.x();
     odometry.pose.pose.position.y = estimator.relo_relative_t.y();
     odometry.pose.pose.position.z = estimator.relo_relative_t.z();

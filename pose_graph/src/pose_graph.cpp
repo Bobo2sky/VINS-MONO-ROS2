@@ -26,11 +26,7 @@ PoseGraph::~PoseGraph()
 
 void PoseGraph::registerPub(rclcpp::Node::SharedPtr n)
 {
-    pub_pg_path = n->create_publisher<nav_msgs::msg::Path>("pose_graph_path", 1000);
-    pub_base_path = n->create_publisher<nav_msgs::msg::Path>("base_path", 1000);
     pub_pose_graph = n->create_publisher<visualization_msgs::msg::MarkerArray>("pose_graph", 1000);
-    for (int i = 1; i < 10; i++)
-        pub_path[i] = n->create_publisher<nav_msgs::msg::Path>("path_" + to_string(i), 1000);
 }
 
 void PoseGraph::loadVocabulary(std::string voc_path)
@@ -137,7 +133,7 @@ void PoseGraph::addKeyFrame(KeyFrame* cur_kf, bool flag_detect_loop)
     Quaterniond Q{R};
     geometry_msgs::msg::PoseStamped pose_stamped;
     pose_stamped.header.stamp = rclcpp::Time(cur_kf->time_stamp);
-    pose_stamped.header.frame_id = "world";
+    pose_stamped.header.frame_id = "odom";
     pose_stamped.pose.position.x = P.x() + VISUALIZATION_SHIFT_X;
     pose_stamped.pose.position.y = P.y() + VISUALIZATION_SHIFT_Y;
     pose_stamped.pose.position.z = P.z();
@@ -238,19 +234,6 @@ void PoseGraph::loadKeyFrame(KeyFrame* cur_kf, bool flag_detect_loop)
     Vector3d P;
     Matrix3d R;
     cur_kf->getPose(P, R);
-    Quaterniond Q{R};
-    geometry_msgs::msg::PoseStamped pose_stamped;
-    pose_stamped.header.stamp = rclcpp::Time(cur_kf->time_stamp);
-    pose_stamped.header.frame_id = "world";
-    pose_stamped.pose.position.x = P.x() + VISUALIZATION_SHIFT_X;
-    pose_stamped.pose.position.y = P.y() + VISUALIZATION_SHIFT_Y;
-    pose_stamped.pose.position.z = P.z();
-    pose_stamped.pose.orientation.x = Q.x();
-    pose_stamped.pose.orientation.y = Q.y();
-    pose_stamped.pose.orientation.z = Q.z();
-    pose_stamped.pose.orientation.w = Q.w();
-    base_path.poses.push_back(pose_stamped);
-    base_path.header = pose_stamped.header;
 
     //draw local connection
     if (SHOW_S_EDGE)
@@ -586,7 +569,6 @@ void PoseGraph::updatePath()
     {
         path[i].poses.clear();
     }
-    base_path.poses.clear();
     posegraph_visualization->reset();
 
     if (SAVE_LOOP_PATH)
@@ -606,7 +588,7 @@ void PoseGraph::updatePath()
 
         geometry_msgs::msg::PoseStamped pose_stamped;
         pose_stamped.header.stamp = rclcpp::Time((*it)->time_stamp);
-        pose_stamped.header.frame_id = "world";
+        pose_stamped.header.frame_id = "odom";
         pose_stamped.pose.position.x = P.x() + VISUALIZATION_SHIFT_X;
         pose_stamped.pose.position.y = P.y() + VISUALIZATION_SHIFT_Y;
         pose_stamped.pose.position.z = P.z();
@@ -614,16 +596,8 @@ void PoseGraph::updatePath()
         pose_stamped.pose.orientation.y = Q.y();
         pose_stamped.pose.orientation.z = Q.z();
         pose_stamped.pose.orientation.w = Q.w();
-        if((*it)->sequence == 0)
-        {
-            base_path.poses.push_back(pose_stamped);
-            base_path.header = pose_stamped.header;
-        }
-        else
-        {
-            path[(*it)->sequence].poses.push_back(pose_stamped);
-            path[(*it)->sequence].header = pose_stamped.header;
-        }
+        path[(*it)->sequence].poses.push_back(pose_stamped);
+        path[(*it)->sequence].header = pose_stamped.header;
 
         if (SAVE_LOOP_PATH)
         {
@@ -876,14 +850,9 @@ void PoseGraph::publish()
         //if (sequence_loop[i] == true || i == base_sequence)
         if (1 || i == base_sequence)
         {
-            pub_pg_path->publish(path[i]);
-            pub_path[i]->publish(path[i]);
             posegraph_visualization->publish_by(pub_pose_graph, path[sequence_cnt].header);
         }
     }
-    base_path.header.frame_id = "world";
-    pub_base_path->publish(base_path);
-    //posegraph_visualization->publish_by(pub_pose_graph, path[sequence_cnt].header);
 }
 
 void PoseGraph::updateKeyFrameLoop(int index, Eigen::Matrix<double, 8, 1 > &_loop_info)
