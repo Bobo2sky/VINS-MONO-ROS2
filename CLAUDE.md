@@ -33,8 +33,9 @@ colcon build
 ```text
 图像话题 (按 yaml 的 image_type 订阅 raw Image 或 CompressedImage)
   └─ feature_tracker/src/feature_tracker_node.cpp
-       img_callback / compressed_img_callback(由 image_type 决定,见下节)
-       → cv_bridge 转 mono8 → FeatureTracker::readImage (feature_tracker.cpp)
+       img_callback / compressed_img_callback(由 image_type 决定,见下节)只入队,
+       两级流水线:解码线程(cv_bridge/imdecode + 降采样 resize)→ 跟踪线程串行执行
+       FeatureTracker::readImage (feature_tracker.cpp)
          (CLAHE 可选均衡 / LK 光流 / rejectWithF / setMask / goodFeaturesToTrack)
        → undistortedPoints() 经 camodocal 相机模型去畸变(归一化坐标)
        → 发布 /feature_tracker/feature (PointCloud: x,y,z=1 + id/u/v/velocity 通道)
@@ -133,7 +134,7 @@ TF 广播:`odom → base_link` 与 `base_link → camera`(均在 pubOdometry 同
 
 ## 图像频率与分辨率说明(10Hz 8MP 相机)
 
-当前车端传感器为 10Hz 8MP(3840×2160)压缩图像(front_8mp),800mp launch + `euroc_config_800mp.yaml` 运行,`downsample: 2` 降到 1920×1080 跟踪。CPU 实测(32 核机,slam_imu_cam bag):未降采样时 feature_tracker ~175% CPU 且**丢帧 45%**(只处理 5.4Hz);downsample: 2 后 ~135% CPU、10Hz 满速率,轨迹与 GPS 一致性 95%(未降采样版因丢帧噪声反而虚高 10%)。已做的其他 CPU 优化:show_track 可视化图缩到 1/2 发布(原 8MB/帧)、path/relo_path 全量重发 1s 节流、imu_propagate 受 `visualize_imu_forward` 控制、rviz 移出 800mp launch(需要时手动 `ros2 run rviz2 rviz2 -d <config>`)、OpenCV 单线程化(`cv_num_threads: 1`,满载机器上线程池 worker 被抢占会造成 track 段耗时尖峰)。耗时观测:feature_tracker 的 `ft timing` 与 vins_estimator 的 `solver timing`(均 30 帧聚合 INFO,超预算 WARN)。
+当前车端传感器为 10Hz 8MP(3840×2160)压缩图像(front_8mp),800mp launch + `euroc_config_800mp.yaml` 运行,`downsample: 4` 降到 960×540 跟踪。CPU 实测(32 核机,slam_imu_cam bag):未降采样时 feature_tracker ~175% CPU 且**丢帧 45%**(只处理 5.4Hz);downsample: 2 时 ~135% CPU、10Hz 满速率,轨迹与 GPS 一致性 95%(未降采样版因丢帧噪声反而虚高 10%)。已做的其他 CPU 优化:show_track 可视化图缩到 1/2 发布(原 8MB/帧)、path/relo_path 全量重发 1s 节流、imu_propagate 受 `visualize_imu_forward` 控制、rviz 移出 800mp launch(需要时手动 `ros2 run rviz2 rviz2 -d <config>`)、OpenCV 单线程化(`cv_num_threads: 1`,满载机器上线程池 worker 被抢占会造成 track 段耗时尖峰)、**两级流水线**(callback 只入队,解码线程与跟踪线程经深度受限队列衔接:解码前队列深度 3 吸收帧突发,解码后深度 1;解码与跟踪重叠执行,LK 帧间串行状态机不可并行;任一环节持续超 100ms 预算时丢旧保新,输出新鲜帧降频而非积压,丢弃计数随 `ft timing` 输出;特征输出与串行版逐位一致)。耗时观测:feature_tracker 的 `ft timing` 与 vins_estimator 的 `solver timing`(均 30 帧聚合 INFO,超预算 WARN)。
 
 - `freq: 10`(特征发布上限)与 10Hz 输入正好匹配;设 `freq: 0` 可严格跟随输入频率
 - `WINDOW_SIZE = 20` 在 10Hz 下滑窗覆盖 2s,初始化与优化正常
