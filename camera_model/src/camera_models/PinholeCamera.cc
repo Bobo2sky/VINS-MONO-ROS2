@@ -613,7 +613,9 @@ PinholeCamera::liftProjective(const Eigen::Vector2d& p, Eigen::Vector3d& P) cons
                 double lo = 0.0;
                 double hi = -1.0;
                 double r_peak = 0.0, f_peak = 0.0;
-                double step = 0.02 * std::max(r_d, 1.0);
+                // 扫描只需括住根(二分对区间宽度不敏感),粗步长即可;
+                // 峰值检测/单调性判断逻辑不受步长影响
+                double step = 0.1 * std::max(r_d, 1.0);
                 for (double r = step; r < 1e2; r += step)
                 {
                     double f = radialDistort(r);
@@ -638,8 +640,8 @@ PinholeCamera::liftProjective(const Eigen::Vector2d& p, Eigen::Vector3d& P) cons
 
                 if (hi > 0.0)
                 {
-                    // 二分求根
-                    for (int i = 0; i < 50; ++i)
+                    // 二分求根:25 次后区间 ~6e-10,足够作为牛顿迭代初值
+                    for (int i = 0; i < 25; ++i)
                     {
                         double mid = 0.5 * (lo + hi);
                         if (radialDistort(mid) < r_d)

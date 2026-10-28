@@ -1,5 +1,6 @@
 #include "feature_tracker.h"
 #include <memory>
+#include <tuple>
 
 int FeatureTracker::n_id = 0;
 
@@ -43,28 +44,35 @@ void FeatureTracker::setMask()
     
 
     // prefer to keep features that are tracked for long time
-    vector<pair<int, pair<cv::Point2f, int>>> cnt_pts_id;
+    // 去畸变缓存与 forw_pts 对齐时随排序同步重排,否则不携带(undistortedPoints 现场计算)
+    bool has_un_cache = (forw_un_cache.size() == forw_pts.size());
+    vector<tuple<int, cv::Point2f, int, cv::Point2f>> cnt_pts_id;  // track_cnt, 像素点, id, 归一化点
 
     for (unsigned int i = 0; i < forw_pts.size(); i++)
-        cnt_pts_id.push_back(make_pair(track_cnt[i], make_pair(forw_pts[i], ids[i])));
+        cnt_pts_id.push_back(make_tuple(track_cnt[i], forw_pts[i], ids[i],
+                                        has_un_cache ? forw_un_cache[i] : cv::Point2f(0, 0)));
 
-    sort(cnt_pts_id.begin(), cnt_pts_id.end(), [](const pair<int, pair<cv::Point2f, int>> &a, const pair<int, pair<cv::Point2f, int>> &b)
+    sort(cnt_pts_id.begin(), cnt_pts_id.end(),
+         [](const tuple<int, cv::Point2f, int, cv::Point2f> &a, const tuple<int, cv::Point2f, int, cv::Point2f> &b)
          {
-            return a.first > b.first;
+            return get<0>(a) > get<0>(b);
          });
 
     forw_pts.clear();
     ids.clear();
     track_cnt.clear();
+    forw_un_cache.clear();
 
     for (auto &it : cnt_pts_id)
     {
-        if (mask.at<uchar>(it.second.first) == 255)
+        if (mask.at<uchar>(get<1>(it)) == 255)
         {
-            forw_pts.push_back(it.second.first);
-            ids.push_back(it.second.second);
-            track_cnt.push_back(it.first);
-            cv::circle(mask, it.second.first, MIN_DIST, 0, -1);
+            forw_pts.push_back(get<1>(it));
+            ids.push_back(get<2>(it));
+            track_cnt.push_back(get<0>(it));
+            if (has_un_cache)
+                forw_un_cache.push_back(get<3>(it));
+            cv::circle(mask, get<1>(it), MIN_DIST, 0, -1);
         }
     }
 }
@@ -84,6 +92,8 @@ void FeatureTracker::readImage(const cv::Mat &_img, double _cur_time)
     cv::Mat img;
     TicToc t_r;
     cur_time = _cur_time;
+    // 分段计时清零(未被本帧路径覆盖的阶段保持 0)
+    t_lk_ms = t_reject_ms = t_mask_ms = t_gftt_ms = t_undist_ms = 0;
 
     if (EQUALIZE)
     {
@@ -105,6 +115,7 @@ void FeatureTracker::readImage(const cv::Mat &_img, double _cur_time)
     }
 
     forw_pts.clear();
+    forw_un_cache.clear();
 
     if (cur_pts.size() > 0)
     {
@@ -122,7 +133,8 @@ void FeatureTracker::readImage(const cv::Mat &_img, double _cur_time)
         reduceVector(ids, status);
         reduceVector(cur_un_pts, status);
         reduceVector(track_cnt, status);
-        RCUTILS_LOG_DEBUG("temporal optical flow costs: %fms", t_o.toc());
+        t_lk_ms = t_o.toc();
+        RCUTILS_LOG_DEBUG("temporal optical flow costs: %fms", t_lk_ms);
     }
 
     for (auto &n : track_cnt)
@@ -134,7 +146,8 @@ void FeatureTracker::readImage(const cv::Mat &_img, double _cur_time)
         RCUTILS_LOG_DEBUG("set mask begins");
         TicToc t_m;
         setMask();
-        RCUTILS_LOG_DEBUG("set mask costs %fms", t_m.toc());
+        t_mask_ms = t_m.toc();
+        RCUTILS_LOG_DEBUG("set mask costs %fms", t_mask_ms);
 
         RCUTILS_LOG_DEBUG("detect feature begins");
         TicToc t_t;
@@ -151,7 +164,8 @@ void FeatureTracker::readImage(const cv::Mat &_img, double _cur_time)
         }
         else
             n_pts.clear();
-        RCUTILS_LOG_DEBUG("detect feature costs: %fms", t_t.toc());
+        t_gftt_ms = t_t.toc();
+        RCUTILS_LOG_DEBUG("detect feature costs: %fms", t_gftt_ms);
 
         RCUTILS_LOG_DEBUG("add feature begins");
         TicToc t_a;
@@ -164,7 +178,9 @@ void FeatureTracker::readImage(const cv::Mat &_img, double _cur_time)
     prev_un_pts = cur_un_pts;
     cur_img = forw_img;
     cur_pts = forw_pts;
+    TicToc t_u;
     undistortedPoints();
+    t_undist_ms = t_u.toc();
     prev_time = cur_time;
 }
 
@@ -177,13 +193,17 @@ void FeatureTracker::rejectWithF()
         vector<cv::Point2f> un_cur_pts(cur_pts.size()), un_forw_pts(forw_pts.size());
         for (unsigned int i = 0; i < cur_pts.size(); i++)
         {
-            Eigen::Vector3d tmp_p;
-            m_camera->liftProjective(Eigen::Vector2d(cur_pts[i].x, cur_pts[i].y), tmp_p);
-            tmp_p.x() = FOCAL_LENGTH * tmp_p.x() / tmp_p.z() + COL / 2.0;
-            tmp_p.y() = FOCAL_LENGTH * tmp_p.y() / tmp_p.z() + ROW / 2.0;
-            un_cur_pts[i] = cv::Point2f(tmp_p.x(), tmp_p.y());
+            // cur_pts 的归一化去畸变坐标已由上一帧 undistortedPoints 算得
+            // (cur_un_pts 与 cur_pts 经同一 LK/RANSAC status 对齐),
+            // 这里仅做焦距缩放,无需重复 liftProjective
+            un_cur_pts[i] = cv::Point2f(FOCAL_LENGTH * cur_un_pts[i].x + COL / 2.0,
+                                        FOCAL_LENGTH * cur_un_pts[i].y + ROW / 2.0);
 
+            Eigen::Vector3d tmp_p;
             m_camera->liftProjective(Eigen::Vector2d(forw_pts[i].x, forw_pts[i].y), tmp_p);
+            // 归一化坐标先存缓存(供本帧 undistortedPoints 复用,与 forw_pts 对齐),
+            // 再换算 F 矩阵检验用的焦距平面像素坐标
+            forw_un_cache.push_back(cv::Point2f(tmp_p.x() / tmp_p.z(), tmp_p.y() / tmp_p.z()));
             tmp_p.x() = FOCAL_LENGTH * tmp_p.x() / tmp_p.z() + COL / 2.0;
             tmp_p.y() = FOCAL_LENGTH * tmp_p.y() / tmp_p.z() + ROW / 2.0;
             un_forw_pts[i] = cv::Point2f(tmp_p.x(), tmp_p.y());
@@ -195,11 +215,13 @@ void FeatureTracker::rejectWithF()
         reduceVector(prev_pts, status);
         reduceVector(cur_pts, status);
         reduceVector(forw_pts, status);
+        reduceVector(forw_un_cache, status);
         reduceVector(cur_un_pts, status);
         reduceVector(ids, status);
         reduceVector(track_cnt, status);
+        t_reject_ms = t_f.toc();
         // RCUTILS_LOG_INFO("FM ransac: %d -> %lu: %f", size_a, forw_pts.size(), 1.0 * forw_pts.size() / size_a);
-        // RCUTILS_LOG_INFO("FM ransac costs: %fms", t_f.toc());
+        // RCUTILS_LOG_INFO("FM ransac costs: %fms", t_reject_ms);
     }
 }
 
@@ -280,6 +302,13 @@ void FeatureTracker::undistortedPoints()
     //cv::undistortPoints(cur_pts, un_pts, K, cv::Mat());
     for (unsigned int i = 0; i < cur_pts.size(); i++)
     {
+        // 前缀复用 rejectWithF 已算得的去畸变坐标,仅新检测点现场计算
+        if (i < forw_un_cache.size())
+        {
+            cur_un_pts.push_back(forw_un_cache[i]);
+            cur_un_pts_map.insert(make_pair(ids[i], forw_un_cache[i]));
+            continue;
+        }
         Eigen::Vector2d a(cur_pts[i].x, cur_pts[i].y);
         Eigen::Vector3d b;
         m_camera->liftProjective(a, b);

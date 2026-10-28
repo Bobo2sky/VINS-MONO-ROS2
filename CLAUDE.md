@@ -133,7 +133,7 @@ TF 广播:`odom → base_link` 与 `base_link → camera`(均在 pubOdometry 同
 
 ## 图像频率与分辨率说明(10Hz 8MP 相机)
 
-当前车端传感器为 10Hz 8MP(3840×2160)压缩图像(front_8mp),800mp launch + `euroc_config_800mp.yaml` 运行,`downsample: 2` 降到 1920×1080 跟踪。CPU 实测(32 核机,slam_imu_cam bag):未降采样时 feature_tracker ~175% CPU 且**丢帧 45%**(只处理 5.4Hz);downsample: 2 后 ~135% CPU、10Hz 满速率,轨迹与 GPS 一致性 95%(未降采样版因丢帧噪声反而虚高 10%)。已做的其他 CPU 优化:show_track 可视化图缩到 1/2 发布(原 8MB/帧)、path/relo_path 全量重发 1s 节流、imu_propagate 受 `visualize_imu_forward` 控制、rviz 移出 800mp launch(需要时手动 `ros2 run rviz2 rviz2 -d <config>`)。
+当前车端传感器为 10Hz 8MP(3840×2160)压缩图像(front_8mp),800mp launch + `euroc_config_800mp.yaml` 运行,`downsample: 2` 降到 1920×1080 跟踪。CPU 实测(32 核机,slam_imu_cam bag):未降采样时 feature_tracker ~175% CPU 且**丢帧 45%**(只处理 5.4Hz);downsample: 2 后 ~135% CPU、10Hz 满速率,轨迹与 GPS 一致性 95%(未降采样版因丢帧噪声反而虚高 10%)。已做的其他 CPU 优化:show_track 可视化图缩到 1/2 发布(原 8MB/帧)、path/relo_path 全量重发 1s 节流、imu_propagate 受 `visualize_imu_forward` 控制、rviz 移出 800mp launch(需要时手动 `ros2 run rviz2 rviz2 -d <config>`)、OpenCV 单线程化(`cv_num_threads: 1`,满载机器上线程池 worker 被抢占会造成 track 段耗时尖峰)。耗时观测:feature_tracker 的 `ft timing` 与 vins_estimator 的 `solver timing`(均 30 帧聚合 INFO,超预算 WARN)。
 
 - `freq: 10`(特征发布上限)与 10Hz 输入正好匹配;设 `freq: 0` 可严格跟随输入频率
 - `WINDOW_SIZE = 20` 在 10Hz 下滑窗覆盖 2s,初始化与优化正常
@@ -152,7 +152,7 @@ TF 广播:`odom → base_link` 与 `base_link → camera`(均在 pubOdometry 同
   - 注意:强畸变 rational 标定的可逆域有限(极端边角超出时去畸变结果被夹取到模型边界,输出有限且连续)
 - 外参(cam→IMU):`extrinsicRotation` / `extrinsicTranslation`;`estimate_extrinsic`:
   - `0` 信任给定外参不变;`1` 在初值附近在线优化;`2` 完全在线标定(不给 R,T,初始阶段做旋转运动)
-- 特征跟踪:`max_cnt`(特征数)、`min_dist`、`freq`(发布频率)、`F_threshold`、`equalize`、`fisheye`(加载 `config_pkg/config/fisheye_mask.jpg` 圆形 mask)、`downsample`(降采样跟踪倍数,见「图像/IMU 输入接口」节)
+- 特征跟踪:`max_cnt`(特征数)、`min_dist`、`freq`(发布频率)、`F_threshold`、`equalize`、`fisheye`(加载 `config_pkg/config/fisheye_mask.jpg` 圆形 mask)、`downsample`(降采样跟踪倍数,见「图像/IMU 输入接口」节)、`decode_reduced`(压缩路径解码阶段直接降尺度)、`cv_num_threads`(OpenCV 并行线程数,默认 1)
 - IMU 噪声:`acc_n / gyr_n / acc_w / gyr_w / g_norm`(越准越好,可用 IMU 手册或 Allan 方差)
 - 回环:`loop_closure`、`load_previous_pose_graph`、`fast_relocalization`、`pose_graph_save_path`、`support_path`
 - 时延:`estimate_td` / `td`(相机-IMU 时间偏移);卷帘快门:`rolling_shutter` / `rolling_shutter_tr`

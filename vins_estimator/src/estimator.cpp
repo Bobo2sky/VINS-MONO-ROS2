@@ -189,7 +189,27 @@ void Estimator::processImage(const map<int, vector<pair<int, Eigen::Matrix<doubl
         TicToc t_solve;
         solveOdometry();
 
-        RCUTILS_LOG_DEBUG("solver costs: %fms", t_solve.toc());
+        // solver 耗时 30 帧窗口聚合(INFO 可见),超 max_solver_time 告警;
+        // 风格与 feature_tracker_node 的 ft timing 汇总一致
+        {
+            static double sum_solve = 0, max_solve = 0;
+            static int solve_cnt = 0;
+            double solve_ms = t_solve.toc();
+            sum_solve += solve_ms;
+            if (solve_ms > max_solve)
+                max_solve = solve_ms;
+            solve_cnt++;
+            if (solve_cnt >= 30)
+            {
+                RCUTILS_LOG_INFO("solver timing(ms, 30f): avg %.1f max %.1f",
+                                 sum_solve / solve_cnt, max_solve);
+                if (sum_solve / solve_cnt > SOLVER_TIME * 1000.0)
+                    RCUTILS_LOG_WARN("solver avg %.1fms exceeds max_solver_time %.0fms",
+                                     sum_solve / solve_cnt, SOLVER_TIME * 1000.0);
+                sum_solve = max_solve = 0;
+                solve_cnt = 0;
+            }
+        }
 
         if (failureDetection())
         {

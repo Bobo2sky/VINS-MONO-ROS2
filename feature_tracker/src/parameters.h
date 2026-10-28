@@ -17,6 +17,11 @@ extern std::vector<std::string> CAM_NAMES;
 extern int MAX_CNT;
 extern int MIN_DIST;
 extern int DOWNSAMPLE;
+// 压缩图解码阶段直接按 DOWNSAMPLE 缩放输出(IMREAD_REDUCED_*),0 = 关闭走全尺寸解码+resize
+extern int DECODE_REDUCED;
+// OpenCV 内部并行线程数(cv::setNumThreads),默认 1:
+// 跟踪分辨率下并行负收益,且满载机器上线程池 worker 被抢占会导致 join 停滞(track 段耗时尖峰)
+extern int CV_NUM_THREADS;
 extern int WINDOW_SIZE;
 extern int FREQ;
 extern double F_THRESHOLD;

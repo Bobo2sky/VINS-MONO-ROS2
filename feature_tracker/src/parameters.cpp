@@ -13,6 +13,8 @@ int MIN_DIST;
 // 图像降采样倍数(仅 PINHOLE 模型):解码后 resize 到 1/DOWNSAMPLE 分辨率再跟踪,
 // 内参/min_dist/ROW/COL 同比缩放,归一化坐标畸变与分辨率无关
 int DOWNSAMPLE = 1;
+int DECODE_REDUCED = 1;
+int CV_NUM_THREADS = 1;
 int WINDOW_SIZE;
 int FREQ;
 double F_THRESHOLD;
@@ -109,6 +111,20 @@ void readParameters(rclcpp::Node::SharedPtr &n)
     {
         RCUTILS_LOG_WARN("invalid downsample: %d, fall back to 1", DOWNSAMPLE);
         DOWNSAMPLE = 1;
+    }
+    // 解码阶段直接降尺度(仅压缩路径生效,DOWNSAMPLE 为 2/4/8 时有效)
+    DECODE_REDUCED = 1;
+    if (!fsSettings["decode_reduced"].empty())
+        DECODE_REDUCED = (int)fsSettings["decode_reduced"];
+    // OpenCV 内部并行线程数:跟踪分辨率下并行负收益,且线程池 worker 在满载机器上被抢占
+    // 会导致 join 停滞(偶发 track 段耗时尖峰),默认单线程;1 合法值外的配置回退 1
+    CV_NUM_THREADS = 1;
+    if (!fsSettings["cv_num_threads"].empty())
+        CV_NUM_THREADS = (int)fsSettings["cv_num_threads"];
+    if (CV_NUM_THREADS < 1)
+    {
+        RCUTILS_LOG_WARN("invalid cv_num_threads: %d, fall back to 1", CV_NUM_THREADS);
+        CV_NUM_THREADS = 1;
     }
     ROW /= DOWNSAMPLE;
     COL /= DOWNSAMPLE;

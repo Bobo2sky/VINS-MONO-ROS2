@@ -48,6 +48,10 @@ rclcpp::Publisher<sensor_msgs::msg::PointCloud>::SharedPtr pub_img;
 rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_match;
 rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr pub_restart;
 
+// 上一帧的解码/格式转换耗时(ms):compressed 路径 imdecode、raw 路径 cv_bridge,
+// 原计时 t_r 不含此段,补全后由 process_image 的 30 帧窗口汇总输出
+static double g_decode_ms = 0.0;
+
 FeatureTracker trackerData[NUM_OF_CAM];
 double first_image_time;
 int pub_count = 1;
@@ -97,12 +101,16 @@ void process_image(const cv::Mat &raw_img, const std_msgs::msg::Header &header)
         PUB_THIS_FRAME = false;
 
     // 降采样跟踪:解码/转换后 resize 到 (COL, ROW) 再进入光流/特征检测
+    // (解码端已按 DOWNSAMPLE 减半输出时尺寸一致,跳过 resize)
     cv::Mat track_img = raw_img;
-    if (DOWNSAMPLE > 1)
+    double resize_ms = 0.0;
+    if (DOWNSAMPLE > 1 && (raw_img.cols != COL || raw_img.rows != ROW))
     {
+        TicToc t_resize;
         cv::Mat scaled;
         cv::resize(track_img, scaled, cv::Size(COL, ROW), 0, 0, cv::INTER_AREA);
         track_img = scaled;
+        resize_ms = t_resize.toc();
     }
 
     cv::Mat show_img = track_img;
@@ -140,8 +148,10 @@ void process_image(const cv::Mat &raw_img, const std_msgs::msg::Header &header)
             break;
     }
 
+    double pub_ms = 0.0;
     if (PUB_THIS_FRAME)
     {
+        TicToc t_pub;
         pub_count++;
         sensor_msgs::msg::PointCloud::SharedPtr feature_points(new sensor_msgs::msg::PointCloud);
         sensor_msgs::msg::ChannelFloat32 id_of_point;
@@ -218,14 +228,54 @@ void process_image(const cv::Mat &raw_img, const std_msgs::msg::Header &header)
             cv_bridge::CvImage out_img(header, sensor_msgs::image_encodings::BGR8, small_img);
             pub_match->publish(*(out_img.toImageMsg()));
         }
+        pub_ms = t_pub.toc();
     }
-    RCUTILS_LOG_DEBUG("whole feature tracker processing costs: %fms", t_r.toc());
+    double total_ms = t_r.toc();
+    RCUTILS_LOG_DEBUG("whole feature tracker processing costs: %fms", total_ms);
+
+    // 30 帧窗口分段耗时汇总(INFO 级可见;decode 为计时盲区的补全)
+    {
+        static double sum_decode = 0, sum_resize = 0, sum_lk = 0, sum_reject = 0,
+                      sum_mask = 0, sum_gftt = 0, sum_undist = 0, sum_pub = 0, sum_total = 0;
+        static int frame_cnt = 0;
+        sum_decode += g_decode_ms;
+        sum_resize += resize_ms;
+        for (int i = 0; i < NUM_OF_CAM; i++)
+        {
+            sum_lk += trackerData[i].t_lk_ms;
+            sum_reject += trackerData[i].t_reject_ms;
+            sum_mask += trackerData[i].t_mask_ms;
+            sum_gftt += trackerData[i].t_gftt_ms;
+            sum_undist += trackerData[i].t_undist_ms;
+        }
+        sum_pub += pub_ms;
+        sum_total += total_ms;
+        frame_cnt++;
+        if (frame_cnt >= 30)
+        {
+            RCUTILS_LOG_INFO("ft timing(ms, 30f avg): decode %.1f resize %.1f lk %.1f rejectF %.1f mask %.1f gftt %.1f undist %.1f pub %.1f | total %.1f",
+                             sum_decode / frame_cnt, sum_resize / frame_cnt, sum_lk / frame_cnt,
+                             sum_reject / frame_cnt, sum_mask / frame_cnt, sum_gftt / frame_cnt,
+                             sum_undist / frame_cnt, sum_pub / frame_cnt, sum_total / frame_cnt);
+            if (sum_total / frame_cnt > 100.0)
+                RCUTILS_LOG_WARN("feature tracker avg total %.1fms exceeds 100ms frame budget",
+                                 sum_total / frame_cnt);
+            sum_decode = sum_resize = sum_lk = sum_reject = sum_mask = 0;
+            sum_gftt = sum_undist = sum_pub = sum_total = 0;
+            frame_cnt = 0;
+        }
+    }
+    // 单帧超预算立即告警(10Hz 下预算 100ms)
+    if (total_ms + g_decode_ms > 100.0)
+        RCUTILS_LOG_WARN("feature tracker frame costs %.1fms (decode %.1fms + track %.1fms), exceeds 100ms budget",
+                         total_ms + g_decode_ms, g_decode_ms, total_ms);
 }
 
 void img_callback(const sensor_msgs::msg::Image::SharedPtr img_msg)
 {
     if (!acceptImageFormat(FORMAT_RAW))
         return;
+    TicToc t_dec;
     cv_bridge::CvImageConstPtr ptr;
     if (img_msg->encoding == "8UC1")
     {
@@ -241,6 +291,7 @@ void img_callback(const sensor_msgs::msg::Image::SharedPtr img_msg)
     }
     else
         ptr = cv_bridge::toCvCopy(img_msg, sensor_msgs::image_encodings::MONO8);
+    g_decode_ms = t_dec.toc();
     process_image(ptr->image, img_msg->header);
 }
 
@@ -251,8 +302,27 @@ void compressed_img_callback(const sensor_msgs::msg::CompressedImage::SharedPtr 
 {
     if (!acceptImageFormat(FORMAT_COMPRESSED))
         return;
+    TicToc t_dec;
     cv::Mat buf(1, img_msg->data.size(), CV_8UC1, const_cast<uint8_t *>(img_msg->data.data()));
-    cv::Mat gray = cv::imdecode(buf, cv::IMREAD_GRAYSCALE);
+    // 解码阶段直接 1/DOWNSAMPLE 降尺度(libjpeg DCT scaling),免去全尺寸解码 + resize;
+    // 仅压缩路径且倍数为 2/4/8 时生效,失败(如格式不支持缩放解码)回退全尺寸
+    int decode_flag = cv::IMREAD_GRAYSCALE;
+    if (DECODE_REDUCED && DOWNSAMPLE == 2)
+        decode_flag = cv::IMREAD_REDUCED_GRAYSCALE_2;
+    else if (DECODE_REDUCED && DOWNSAMPLE == 4)
+        decode_flag = cv::IMREAD_REDUCED_GRAYSCALE_4;
+    else if (DECODE_REDUCED && DOWNSAMPLE == 8)
+        decode_flag = cv::IMREAD_REDUCED_GRAYSCALE_8;
+    cv::Mat gray = cv::imdecode(buf, decode_flag);
+    if (gray.empty() && decode_flag != cv::IMREAD_GRAYSCALE)
+    {
+        static std::atomic<bool> fallback_warned{false};
+        if (!fallback_warned.exchange(true))
+            RCUTILS_LOG_WARN("reduced decode failed (format: %s), fall back to full decode + resize",
+                             img_msg->format.c_str());
+        gray = cv::imdecode(buf, cv::IMREAD_GRAYSCALE);
+    }
+    g_decode_ms = t_dec.toc();
     if (gray.empty())
     {
         RCUTILS_LOG_ERROR("compressed image decode failed (format: %s)", img_msg->format.c_str());
@@ -267,6 +337,11 @@ int main(int argc, char **argv)
     auto n = rclcpp::Node::make_shared("feature_tracker");
 
     readParameters(n);
+
+    // OpenCV 内部并行线程数:单线程化。跟踪分辨率(降采样后)下并行收益为负,且默认
+    // 8 线程池在满载机器上 worker 被其他进程抢占,主线程 join 停滞会造成 track 段
+    // 耗时尖峰(实测偶发 80~100ms,典型 ~6ms);单线程消除常驻 pool 并稳定耗时
+    cv::setNumThreads(CV_NUM_THREADS);
 
     for (int i = 0; i < NUM_OF_CAM; i++)
         trackerData[i].readIntrinsicParameter(CAM_NAMES[i]);
